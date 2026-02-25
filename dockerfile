@@ -24,4 +24,4 @@ RUN mkdir -p /app/database /app/known_faces /app/unknown_faces /app/encodings /a
 
 EXPOSE 8000
 
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+CMD python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
