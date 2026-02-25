@@ -1,0 +1,48 @@
+# Virtual environment - NEVER commit this
+face_env/
+venv/
+env/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Face recognition data (large binary files)
+known_faces/
+unknown_faces/
+classroom_outputs/
+encodings/
+*.pkl
+
+# InsightFace model cache
+.insightface/
+buffalo_l/
+
+# Database (recreated fresh on server)
+*.db
+database/*.db
+
+# Environment secrets
+.env
+.env.local
+.env.production.local
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
