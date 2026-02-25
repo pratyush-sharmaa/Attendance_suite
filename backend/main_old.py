@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 import sys, os
@@ -8,44 +7,36 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from database import init_db, get_connection
 from auth import login_admin, login_faculty, decode_token, hash_password
-
-# Import all routers
-from routes.students    import router as students_router
-from routes.students_edit import router as students_edit_router
-from routes.attendance  import router as attendance_router
-from routes.sections    import router as sections_router
-from routes.faculties   import router as faculties_router
+from routes.students   import router as students_router
+from routes.attendance import router as attendance_router
 from routes.qr_attendance import router as qr_router
-from routes.email_alerts  import router as email_router
-from routes.reports     import router as reports_router
-from routes.chatbot     import router as chat_router
+from routes.email_alerts  import router as alerts_router
+from routes.chatbot import router as chat_router
 
 app = FastAPI(title="Face Attendance API", version="2.0")
 
-# ── CORS ── allow both local dev and production frontend ──────
-ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://localhost:4173",
-    os.environ.get("FRONTEND_URL", ""),   # set this in Railway env vars
-]
-# Remove empty strings
-ALLOWED_ORIGINS = [o for o in ALLOWED_ORIGINS if o]
+app.include_router(students_router)
+app.include_router(attendance_router)
+app.include_router(qr_router)
+app.include_router(alerts_router)
+app.include_router(chat_router)
 
+
+# ── CORS — allow React frontend to talk to backend ───────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=r"https://.*\.vercel\.app",  # allow all Vercel preview URLs
+    allow_origins=["http://localhost:5173"],  # React dev server
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── Startup ───────────────────────────────────────────────────
+# ── Startup ──────────────────────────────────────────────────────
 @app.on_event("startup")
 def startup():
     init_db()
 
-# ── Auth dependency ───────────────────────────────────────────
+# ── Auth dependency ──────────────────────────────────────────────
 def get_current_user(authorization: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -65,10 +56,12 @@ def require_faculty(user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Faculty access required")
     return user
 
-# ── Auth routes ───────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# AUTH ROUTES
+# ══════════════════════════════════════════════════════════════
 class LoginRequest(BaseModel):
     username: Optional[str] = None
-    email:    Optional[str] = None
+    email: Optional[str] = None
     password: str
 
 @app.post("/api/auth/admin-login")
@@ -89,11 +82,13 @@ def faculty_login(body: LoginRequest):
 def get_me(user=Depends(get_current_user)):
     return user
 
-# ── Admin routes ──────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# ADMIN — FACULTY MANAGEMENT
+# ══════════════════════════════════════════════════════════════
 class FacultyCreate(BaseModel):
-    name:       str
-    email:      str
-    password:   str
+    name: str
+    email: str
+    password: str
     department: Optional[str] = ""
 
 @app.get("/api/admin/faculties")
@@ -132,8 +127,11 @@ def delete_faculty(faculty_id: int, user=Depends(require_admin)):
     conn.close()
     return {"message": "Faculty deleted"}
 
+# ══════════════════════════════════════════════════════════════
+# ADMIN — SECTION MANAGEMENT
+# ══════════════════════════════════════════════════════════════
 class SectionCreate(BaseModel):
-    name:       str
+    name: str
     department: Optional[str] = ""
     faculty_id: int
 
@@ -175,6 +173,9 @@ def delete_section(section_id: int, user=Depends(require_admin)):
     conn.close()
     return {"message": "Section deleted"}
 
+# ══════════════════════════════════════════════════════════════
+# ADMIN — DASHBOARD STATS
+# ══════════════════════════════════════════════════════════════
 @app.get("/api/admin/stats")
 def admin_stats(user=Depends(require_admin)):
     from datetime import date
@@ -190,7 +191,9 @@ def admin_stats(user=Depends(require_admin)):
     conn.close()
     return stats
 
-# ── Faculty routes ────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# FACULTY — MY SECTIONS & STUDENTS
+# ══════════════════════════════════════════════════════════════
 @app.get("/api/faculty/sections")
 def get_my_sections(user=Depends(require_faculty)):
     faculty_id = int(user['sub'])
@@ -232,22 +235,72 @@ def faculty_stats(user=Depends(require_faculty)):
     conn.close()
     return stats
 
-# ── Register all routers ──────────────────────────────────────
-app.include_router(students_router)
-app.include_router(students_edit_router)
-app.include_router(attendance_router)
-app.include_router(sections_router)
-app.include_router(faculties_router)
-app.include_router(qr_router)
-app.include_router(email_router)
-app.include_router(reports_router)
-app.include_router(chat_router)
-
-# ── Health check ──────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# HEALTH CHECK
+# ══════════════════════════════════════════════════════════════
 @app.get("/")
 def root():
     return {"status": "Face Attendance API Running", "version": "2.0"}
 
+
+class FacultyUpdate(BaseModel):
+    name:       str
+    email:      str
+    department: Optional[str] = ""
+    password:   Optional[str] = None
+
+class SectionUpdate(BaseModel):
+    name:       str
+    department: Optional[str] = ""
+    faculty_id: int
+
+# ── EDIT FACULTY ─────────────────────────────────────────────
+@app.put("/api/admin/faculties/{faculty_id}")
+def update_faculty(faculty_id: int, data: FacultyUpdate, user=Depends(require_admin)):
+    conn = get_connection()
+    existing = conn.execute(
+        "SELECT id FROM faculties WHERE id=?", (faculty_id,)
+    ).fetchone()
+    if not existing:
+        conn.close()
+        raise HTTPException(404, "Faculty not found")
+
+    if data.password:
+        from auth import hash_password
+        hashed = hash_password(data.password)
+        conn.execute('''
+            UPDATE faculties SET name=?, email=?, department=?, password_hash=?
+            WHERE id=?
+        ''', (data.name, data.email, data.department, hashed, faculty_id))
+    else:
+        conn.execute('''
+            UPDATE faculties SET name=?, email=?, department=?
+            WHERE id=?
+        ''', (data.name, data.email, data.department, faculty_id))
+
+    conn.commit()
+    conn.close()
+    return {"message": "Faculty updated successfully"}
+
+# ── EDIT SECTION ─────────────────────────────────────────────
+@app.put("/api/admin/sections/{section_id}")
+def update_section(section_id: int, data: SectionUpdate, user=Depends(require_admin)):
+    conn = get_connection()
+    existing = conn.execute(
+        "SELECT id FROM sections WHERE id=?", (section_id,)
+    ).fetchone()
+    if not existing:
+        conn.close()
+        raise HTTPException(404, "Section not found")
+
+    conn.execute('''
+        UPDATE sections SET name=?, department=?, faculty_id=?
+        WHERE id=?
+    ''', (data.name, data.department, data.faculty_id, section_id))
+    conn.commit()
+    conn.close()
+    return {"message": "Section updated successfully"}
+
 if __name__ == '__main__':
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
