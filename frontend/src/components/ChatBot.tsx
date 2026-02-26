@@ -343,7 +343,10 @@ export default function ChatBot() {
                                 }}/>
                               ))}
                             </div>
-                          : <span style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>
+                          : <>
+                              <span style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>
+                              {msg.data && msg.data.length > 0 && renderTable(msg.data)}
+                            </>
                         }
                       </div>
 
