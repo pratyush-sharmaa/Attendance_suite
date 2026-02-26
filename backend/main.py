@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 import sys, os
@@ -8,33 +7,26 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from database import init_db, get_connection
 from auth import login_admin, login_faculty, decode_token, hash_password
-
-# Import all routers
-from routes.students    import router as students_router
-from routes.students_edit import router as students_edit_router
-from routes.attendance  import router as attendance_router
-from routes.sections    import router as sections_router
-from routes.faculties   import router as faculties_router
+from routes.students      import router as students_router
+from routes.attendance    import router as attendance_router
 from routes.qr_attendance import router as qr_router
-from routes.email_alerts  import router as email_router
-from routes.reports     import router as reports_router
-from routes.chatbot     import router as chat_router
+from routes.email_alerts  import router as alerts_router
+from routes.chatbot       import router as chat_router
 
 app = FastAPI(title="Face Attendance API", version="2.0")
 
-# ── CORS ── allow both local dev and production frontend ──────
+# ── CORS ──────────────────────────────────────────────────────
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:4173",
-    os.environ.get("FRONTEND_URL", ""),   # set this in Railway env vars
+    os.environ.get("FRONTEND_URL", ""),
 ]
-# Remove empty strings
 ALLOWED_ORIGINS = [o for o in ALLOWED_ORIGINS if o]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=r"https://.*\.vercel\.app",  # allow all Vercel preview URLs
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -89,12 +81,18 @@ def faculty_login(body: LoginRequest):
 def get_me(user=Depends(get_current_user)):
     return user
 
-# ── Admin routes ──────────────────────────────────────────────
+# ── Admin — Faculties ─────────────────────────────────────────
 class FacultyCreate(BaseModel):
     name:       str
     email:      str
     password:   str
     department: Optional[str] = ""
+
+class FacultyUpdate(BaseModel):
+    name:       str
+    email:      str
+    department: Optional[str] = ""
+    password:   Optional[str] = None
 
 @app.get("/api/admin/faculties")
 def get_faculties(user=Depends(require_admin)):
@@ -102,8 +100,7 @@ def get_faculties(user=Depends(require_admin)):
     rows = conn.execute('''
         SELECT f.id, f.name, f.email, f.department, f.created_at,
                COUNT(s.id) as section_count
-        FROM faculties f
-        LEFT JOIN sections s ON s.faculty_id = f.id
+        FROM faculties f LEFT JOIN sections s ON s.faculty_id = f.id
         GROUP BY f.id ORDER BY f.name
     ''').fetchall()
     conn.close()
@@ -124,6 +121,26 @@ def create_faculty(body: FacultyCreate, user=Depends(require_admin)):
     finally:
         conn.close()
 
+@app.put("/api/admin/faculties/{faculty_id}")
+def update_faculty(faculty_id: int, data: FacultyUpdate, user=Depends(require_admin)):
+    conn = get_connection()
+    if not conn.execute("SELECT id FROM faculties WHERE id=?", (faculty_id,)).fetchone():
+        conn.close()
+        raise HTTPException(404, "Faculty not found")
+    if data.password:
+        conn.execute(
+            "UPDATE faculties SET name=?, email=?, department=?, password_hash=? WHERE id=?",
+            (data.name, data.email, data.department, hash_password(data.password), faculty_id)
+        )
+    else:
+        conn.execute(
+            "UPDATE faculties SET name=?, email=?, department=? WHERE id=?",
+            (data.name, data.email, data.department, faculty_id)
+        )
+    conn.commit()
+    conn.close()
+    return {"message": "Faculty updated"}
+
 @app.delete("/api/admin/faculties/{faculty_id}")
 def delete_faculty(faculty_id: int, user=Depends(require_admin)):
     conn = get_connection()
@@ -132,7 +149,13 @@ def delete_faculty(faculty_id: int, user=Depends(require_admin)):
     conn.close()
     return {"message": "Faculty deleted"}
 
+# ── Admin — Sections ──────────────────────────────────────────
 class SectionCreate(BaseModel):
+    name:       str
+    department: Optional[str] = ""
+    faculty_id: int
+
+class SectionUpdate(BaseModel):
     name:       str
     department: Optional[str] = ""
     faculty_id: int
@@ -142,8 +165,7 @@ def get_all_sections(user=Depends(require_admin)):
     conn = get_connection()
     rows = conn.execute('''
         SELECT s.id, s.name, s.department, s.faculty_id,
-               f.name as faculty_name,
-               COUNT(st.id) as student_count
+               f.name as faculty_name, COUNT(st.id) as student_count
         FROM sections s
         LEFT JOIN faculties f ON f.id = s.faculty_id
         LEFT JOIN students st ON st.section_id = s.id
@@ -167,6 +189,20 @@ def create_section(body: SectionCreate, user=Depends(require_admin)):
     finally:
         conn.close()
 
+@app.put("/api/admin/sections/{section_id}")
+def update_section(section_id: int, data: SectionUpdate, user=Depends(require_admin)):
+    conn = get_connection()
+    if not conn.execute("SELECT id FROM sections WHERE id=?", (section_id,)).fetchone():
+        conn.close()
+        raise HTTPException(404, "Section not found")
+    conn.execute(
+        "UPDATE sections SET name=?, department=?, faculty_id=? WHERE id=?",
+        (data.name, data.department, data.faculty_id, section_id)
+    )
+    conn.commit()
+    conn.close()
+    return {"message": "Section updated"}
+
 @app.delete("/api/admin/sections/{section_id}")
 def delete_section(section_id: int, user=Depends(require_admin)):
     conn = get_connection()
@@ -178,8 +214,8 @@ def delete_section(section_id: int, user=Depends(require_admin)):
 @app.get("/api/admin/stats")
 def admin_stats(user=Depends(require_admin)):
     from datetime import date
-    conn = get_connection()
     today = date.today().strftime('%Y-%m-%d')
+    conn = get_connection()
     stats = {
         "total_faculties": conn.execute("SELECT COUNT(*) FROM faculties").fetchone()[0],
         "total_sections":  conn.execute("SELECT COUNT(*) FROM sections").fetchone()[0],
@@ -196,12 +232,9 @@ def get_my_sections(user=Depends(require_faculty)):
     faculty_id = int(user['sub'])
     conn = get_connection()
     rows = conn.execute('''
-        SELECT s.id, s.name, s.department,
-               COUNT(st.id) as student_count
-        FROM sections s
-        LEFT JOIN students st ON st.section_id = s.id
-        WHERE s.faculty_id = ?
-        GROUP BY s.id
+        SELECT s.id, s.name, s.department, COUNT(st.id) as student_count
+        FROM sections s LEFT JOIN students st ON st.section_id = s.id
+        WHERE s.faculty_id = ? GROUP BY s.id
     ''', (faculty_id,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -209,11 +242,10 @@ def get_my_sections(user=Depends(require_faculty)):
 @app.get("/api/faculty/sections/{section_id}/students")
 def get_section_students(section_id: int, user=Depends(require_faculty)):
     conn = get_connection()
-    rows = conn.execute('''
-        SELECT id, name, roll_no, phone, registered_at
-        FROM students WHERE section_id = ?
-        ORDER BY name
-    ''', (section_id,)).fetchall()
+    rows = conn.execute(
+        "SELECT id, name, roll_no, phone, registered_at FROM students WHERE section_id=? ORDER BY name",
+        (section_id,)
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -232,15 +264,11 @@ def faculty_stats(user=Depends(require_faculty)):
     conn.close()
     return stats
 
-# ── Register all routers ──────────────────────────────────────
+# ── Routers ───────────────────────────────────────────────────
 app.include_router(students_router)
-app.include_router(students_edit_router)
 app.include_router(attendance_router)
-app.include_router(sections_router)
-app.include_router(faculties_router)
 app.include_router(qr_router)
-app.include_router(email_router)
-app.include_router(reports_router)
+app.include_router(alerts_router)
 app.include_router(chat_router)
 
 # ── Health check ──────────────────────────────────────────────
