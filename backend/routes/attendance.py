@@ -1,6 +1,8 @@
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+os.environ['OMP_NUM_THREADS'] = '1'
+
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from database import get_connection
 from auth import decode_token
@@ -12,7 +14,7 @@ import insightface
 
 router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
 
-BASE_DIR       = os.path.join(os.path.dirname(__file__), '..', '..')
+BASE_DIR       = os.path.join(os.path.dirname(__file__), '..')
 ENCODINGS_PATH = os.path.join(BASE_DIR, 'encodings', 'encodings.pkl')
 UNKNOWN_PATH   = os.path.join(BASE_DIR, 'unknown_faces')
 CLASSROOM_PATH = os.path.join(BASE_DIR, 'classroom_outputs')
@@ -20,13 +22,15 @@ CLASSROOM_PATH = os.path.join(BASE_DIR, 'classroom_outputs')
 os.makedirs(UNKNOWN_PATH,   exist_ok=True)
 os.makedirs(CLASSROOM_PATH, exist_ok=True)
 
-# ── InsightFace ──────────────────────────────────────────────────
 _model = None
 def get_model():
     global _model
     if _model is None:
-        _model = insightface.app.FaceAnalysis(name='buffalo_l')
-        _model.prepare(ctx_id=-1, det_size=(640, 640))
+        _model = insightface.app.FaceAnalysis(
+            name='buffalo_s',
+            providers=['CPUExecutionProvider']
+        )
+        _model.prepare(ctx_id=0, det_size=(320, 320))
     return _model
 
 def load_encodings():
@@ -42,16 +46,13 @@ def identify_face(embedding, section_id=None, threshold=0.5):
     encodings  = load_encodings()
     best       = None
     best_score = -1
-
     for roll_no, data in encodings.items():
-        # Filter by section if provided
         if section_id and data.get('section_id') != section_id:
             continue
         score = cosine_similarity(embedding, data['embedding'])
         if score > best_score:
             best_score = score
             best = (roll_no, data['name'], data['student_id'], data.get('section_id'))
-
     if best and best_score >= threshold:
         return (*best, best_score)
     return "unknown", "Unknown", None, None, best_score
@@ -68,7 +69,7 @@ def mark_attendance_db(student_id, section_id, faculty_id, method):
         conn.commit()
         return True
     except Exception:
-        return False  # already marked today
+        return False
     finally:
         conn.close()
 
@@ -85,9 +86,6 @@ def save_unknown(img_crop, faculty_id, section_id, method):
     conn.close()
     return path
 
-# ══════════════════════════════════════════════════════════════
-# PROCESS IMAGE — webcam or classroom
-# ══════════════════════════════════════════════════════════════
 @router.post("/process")
 async def process_attendance(
     request:    Request,
@@ -100,7 +98,6 @@ async def process_attendance(
     img_bytes = await photo.read()
     arr = np.frombuffer(img_bytes, np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-
     if img is None:
         raise HTTPException(400, "Could not read image")
 
@@ -113,7 +110,6 @@ async def process_attendance(
         roll_no, name, student_id, sec_id, similarity = identify_face(
             face.embedding, section_id, threshold
         )
-
         if name == "Unknown":
             crop = img[max(0,y1):y2, max(0,x1):x2]
             if crop.size > 0:
@@ -125,26 +121,20 @@ async def process_attendance(
             status = "marked" if marked else "already_marked"
             color  = (0, 255, 0) if marked else (0, 165, 255)
 
-        # Draw on image
         cv2.rectangle(img, (x1,y1), (x2,y2), color, 2)
         label = f"{name} ({similarity:.2f})"
         cv2.putText(img, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
         results.append({
-            "name":       name,
-            "roll_no":    roll_no,
+            "name": name, "roll_no": roll_no,
             "similarity": round(similarity, 3),
-            "status":     status,
-            "bbox":       [x1, y1, x2, y2]
+            "status": status, "bbox": [x1, y1, x2, y2]
         })
 
-    # Save classroom output
     if method == "classroom":
         ts       = datetime.now().strftime('%Y%m%d_%H%M%S')
         out_path = os.path.join(CLASSROOM_PATH, f"class_{ts}.jpg")
         cv2.imwrite(out_path, img)
 
-    # Encode annotated image to base64
     import base64
     _, buffer  = cv2.imencode('.jpg', img)
     img_base64 = base64.b64encode(buffer).decode('utf-8')
@@ -155,16 +145,8 @@ async def process_attendance(
         "already_marked": sum(1 for r in results if r['status'] == 'already_marked'),
         "unknown":        sum(1 for r in results if r['status'] == 'unknown'),
     }
+    return {"results": results, "summary": summary, "annotated_image": f"data:image/jpeg;base64,{img_base64}"}
 
-    return {
-        "results":         results,
-        "summary":         summary,
-        "annotated_image": f"data:image/jpeg;base64,{img_base64}"
-    }
-
-# ══════════════════════════════════════════════════════════════
-# GET ATTENDANCE RECORDS
-# ══════════════════════════════════════════════════════════════
 @router.get("/section/{section_id}")
 def get_section_attendance(section_id: int, date_str: str = None):
     if not date_str:
@@ -172,10 +154,8 @@ def get_section_attendance(section_id: int, date_str: str = None):
     conn = get_connection()
     rows = conn.execute('''
         SELECT s.name, s.roll_no, a.time, a.method, a.date
-        FROM attendance a
-        JOIN students s ON s.id = a.student_id
-        WHERE a.section_id = ? AND a.date = ?
-        ORDER BY a.time
+        FROM attendance a JOIN students s ON s.id = a.student_id
+        WHERE a.section_id = ? AND a.date = ? ORDER BY a.time
     ''', (section_id, date_str)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -184,13 +164,9 @@ def get_section_attendance(section_id: int, date_str: str = None):
 def get_section_summary(section_id: int):
     conn = get_connection()
     rows = conn.execute('''
-        SELECT s.name, s.roll_no,
-               COUNT(a.id) as total_present
-        FROM students s
-        LEFT JOIN attendance a ON a.student_id = s.id
-        WHERE s.section_id = ?
-        GROUP BY s.id
-        ORDER BY s.name
+        SELECT s.name, s.roll_no, COUNT(a.id) as total_present
+        FROM students s LEFT JOIN attendance a ON a.student_id = s.id
+        WHERE s.section_id = ? GROUP BY s.id ORDER BY s.name
     ''', (section_id,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]

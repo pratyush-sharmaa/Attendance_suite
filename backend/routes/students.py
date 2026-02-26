@@ -1,6 +1,8 @@
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+os.environ['OMP_NUM_THREADS'] = '1'
+
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from database import get_connection
 from auth import decode_token
@@ -12,23 +14,24 @@ import insightface
 
 router = APIRouter(prefix="/api/students", tags=["Students"])
 
-BASE_DIR       = os.path.join(os.path.dirname(__file__), '..', '..')
+BASE_DIR       = os.path.join(os.path.dirname(__file__), '..')
 KNOWN_FACES    = os.path.join(BASE_DIR, 'known_faces')
 ENCODINGS_PATH = os.path.join(BASE_DIR, 'encodings', 'encodings.pkl')
 
 os.makedirs(KNOWN_FACES, exist_ok=True)
 os.makedirs(os.path.dirname(ENCODINGS_PATH), exist_ok=True)
 
-# ── InsightFace ──────────────────────────────────────────────────
 _model = None
 def get_model():
     global _model
     if _model is None:
-        _model = insightface.app.FaceAnalysis(name='buffalo_l')
-        _model.prepare(ctx_id=-1, det_size=(640, 640))
+        _model = insightface.app.FaceAnalysis(
+            name='buffalo_s',
+            providers=['CPUExecutionProvider']
+        )
+        _model.prepare(ctx_id=0, det_size=(320, 320))
     return _model
 
-# ── Encoding helpers ─────────────────────────────────────────────
 def load_encodings():
     if os.path.exists(ENCODINGS_PATH):
         with open(ENCODINGS_PATH, 'rb') as f:
@@ -48,7 +51,6 @@ def extract_embedding(img_bytes: bytes):
     face = sorted(faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]), reverse=True)[0]
     return face.embedding, img
 
-# ── Auth helper ───────────────────────────────────────────────────
 def get_auth(request: Request):
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
@@ -58,9 +60,6 @@ def get_auth(request: Request):
         raise HTTPException(401, "Invalid token")
     return payload
 
-# ══════════════════════════════════════════════════════════════
-# REGISTER STUDENT
-# ══════════════════════════════════════════════════════════════
 @router.post("/register")
 async def register_student(
     request:    Request,
@@ -70,11 +69,9 @@ async def register_student(
     phone:      str        = Form(""),
     photo:      UploadFile = File(...),
 ):
-    get_auth(request)  # verify token
-
+    get_auth(request)
     img_bytes = await photo.read()
     embedding, img = extract_embedding(img_bytes)
-
     if embedding is None:
         raise HTTPException(400, "No face detected. Use a clearer front-facing photo.")
 
@@ -92,11 +89,9 @@ async def register_student(
         conn.close()
         raise HTTPException(400, f"Roll number already exists or DB error: {str(e)}")
 
-    # Save face image
     img_path = os.path.join(KNOWN_FACES, f"{roll_no}.jpg")
     cv2.imwrite(img_path, img)
 
-    # Save encoding
     encodings = load_encodings()
     encodings[roll_no] = {
         "name":       name,
@@ -106,12 +101,8 @@ async def register_student(
     }
     save_encodings(encodings)
     conn.close()
-
     return {"message": f"{name} registered successfully", "student_id": student_id}
 
-# ══════════════════════════════════════════════════════════════
-# GET STUDENTS BY SECTION
-# ══════════════════════════════════════════════════════════════
 @router.get("/section/{section_id}")
 def get_students_by_section(section_id: int):
     conn = get_connection()
@@ -126,84 +117,63 @@ def get_students_by_section(section_id: int):
     conn.close()
     return [dict(r) for r in rows]
 
-# ══════════════════════════════════════════════════════════════
-# DELETE STUDENT
-# ══════════════════════════════════════════════════════════════
 @router.delete("/{student_id}")
 def delete_student(student_id: int):
     conn = get_connection()
-    student = conn.execute(
-        "SELECT roll_no FROM students WHERE id=?", (student_id,)
-    ).fetchone()
-
+    student = conn.execute("SELECT roll_no FROM students WHERE id=?", (student_id,)).fetchone()
     if not student:
         raise HTTPException(404, "Student not found")
-
     roll_no = student['roll_no']
     conn.execute("DELETE FROM attendance WHERE student_id=?", (student_id,))
     conn.execute("DELETE FROM students WHERE id=?", (student_id,))
     conn.commit()
     conn.close()
 
-    # Remove face image
     img_path = os.path.join(KNOWN_FACES, f"{roll_no}.jpg")
     if os.path.exists(img_path):
         os.remove(img_path)
 
-    # Remove encoding
     encodings = load_encodings()
     if roll_no in encodings:
         del encodings[roll_no]
         save_encodings(encodings)
-
     return {"message": "Student deleted successfully"}
 
 @router.put("/{student_id}")
 async def update_student(
-    request:    Request,
-    student_id: int,
+    request:      Request,
+    student_id:   int,
     name:         str        = Form(...),
     roll_no:      str        = Form(...),
     phone:        str        = Form(""),
     parent_email: str        = Form(""),
     parent_name:  str        = Form(""),
     parent_phone: str        = Form(""),
-    photo:        UploadFile = File(None),  # optional — only if re-registering face
+    photo:        UploadFile = File(None),
 ):
     get_auth(request)
-
     conn = get_connection()
-    student = conn.execute(
-        "SELECT * FROM students WHERE id=?", (student_id,)
-    ).fetchone()
-
+    student = conn.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
     if not student:
         conn.close()
         raise HTTPException(404, "Student not found")
 
     old_roll = student['roll_no']
-
-    # Update DB fields
     conn.execute(
         "UPDATE students SET name=?, phone=?, parent_email=?, parent_name=?, parent_phone=? WHERE id=?",
         (name, phone, parent_email, parent_name, parent_phone, student_id)
     )
     conn.commit()
 
-    # If a new photo was uploaded — re-register the face embedding
     if photo and photo.filename:
         img_bytes = await photo.read()
         if img_bytes:
             embedding, img = extract_embedding(img_bytes)
             if embedding is None:
                 conn.close()
-                raise HTTPException(400, "No face detected in new photo. Keep old face or use clearer image.")
-
-            # Save new face image
+                raise HTTPException(400, "No face detected in new photo.")
             img_path = os.path.join(KNOWN_FACES, f"{old_roll}.jpg")
             cv2.imwrite(img_path, img)
-
-            # Update encoding
             encodings = load_encodings()
             if old_roll in encodings:
                 encodings[old_roll]['name']      = name

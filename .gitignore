@@ -21,6 +21,7 @@ encodings/
 # InsightFace model cache
 .insightface/
 buffalo_l/
+buffalo_s/
 
 # Database (recreated fresh on server)
 *.db
