@@ -22,17 +22,7 @@ ENCODINGS_PATH = os.path.join(BASE_DIR, 'encodings', 'encodings.pkl')
 
 _active_sessions: dict = {}
 
-_model = None
-def get_model():
-    global _model
-    if _model is None:
-        import insightface
-        _model = insightface.app.FaceAnalysis(
-            name='buffalo_s',
-            providers=['CPUExecutionProvider']
-        )
-        _model.prepare(ctx_id=0, det_size=(320, 320))
-    return _model
+from face_model import get_model
 
 def load_encodings():
     if os.path.exists(ENCODINGS_PATH):

@@ -10,7 +10,6 @@ from datetime import date, datetime
 import cv2
 import numpy as np
 import pickle
-import insightface
 
 router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
 
@@ -22,16 +21,7 @@ CLASSROOM_PATH = os.path.join(BASE_DIR, 'classroom_outputs')
 os.makedirs(UNKNOWN_PATH,   exist_ok=True)
 os.makedirs(CLASSROOM_PATH, exist_ok=True)
 
-_model = None
-def get_model():
-    global _model
-    if _model is None:
-        _model = insightface.app.FaceAnalysis(
-            name='buffalo_s',
-            providers=['CPUExecutionProvider']
-        )
-        _model.prepare(ctx_id=0, det_size=(320, 320))
-    return _model
+from face_model import get_model
 
 def load_encodings():
     if os.path.exists(ENCODINGS_PATH):

@@ -6,31 +6,22 @@ os.environ['OMP_NUM_THREADS'] = '1'
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from database import get_connection
 from auth import decode_token
-from typing import Optional
+from datetime import date, datetime
 import cv2
 import numpy as np
 import pickle
-import insightface
 
-router = APIRouter(prefix="/api/students", tags=["Students"])
+router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
 
 BASE_DIR       = os.path.join(os.path.dirname(__file__), '..')
-KNOWN_FACES    = os.path.join(BASE_DIR, 'known_faces')
 ENCODINGS_PATH = os.path.join(BASE_DIR, 'encodings', 'encodings.pkl')
+UNKNOWN_PATH   = os.path.join(BASE_DIR, 'unknown_faces')
+CLASSROOM_PATH = os.path.join(BASE_DIR, 'classroom_outputs')
 
-os.makedirs(KNOWN_FACES, exist_ok=True)
-os.makedirs(os.path.dirname(ENCODINGS_PATH), exist_ok=True)
+os.makedirs(UNKNOWN_PATH,   exist_ok=True)
+os.makedirs(CLASSROOM_PATH, exist_ok=True)
 
-_model = None
-def get_model():
-    global _model
-    if _model is None:
-        _model = insightface.app.FaceAnalysis(
-            name='buffalo_s',
-            providers=['CPUExecutionProvider']
-        )
-        _model.prepare(ctx_id=0, det_size=(320, 320))
-    return _model
+from face_model import get_model
 
 def load_encodings():
     if os.path.exists(ENCODINGS_PATH):
@@ -38,147 +29,158 @@ def load_encodings():
             return pickle.load(f)
     return {}
 
-def save_encodings(data):
-    with open(ENCODINGS_PATH, 'wb') as f:
-        pickle.dump(data, f)
+def cosine_similarity(a, b):
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
-def extract_embedding(img_bytes: bytes):
-    arr   = np.frombuffer(img_bytes, np.uint8)
-    img   = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    faces = get_model().get(img)
-    if not faces:
-        return None, None
-    face = sorted(faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]), reverse=True)[0]
-    return face.embedding, img
+def identify_face(embedding, section_id=None, threshold=0.5):
+    encodings  = load_encodings()
+    best       = None
+    best_score = -1
+    for roll_no, data in encodings.items():
+        if section_id and data.get('section_id') != section_id:
+            continue
+        score = cosine_similarity(embedding, data['embedding'])
+        if score > best_score:
+            best_score = score
+            best = (roll_no, data['name'], data['student_id'], data.get('section_id'))
+    if best and best_score >= threshold:
+        return (*best, best_score)
+    return "unknown", "Unknown", None, None, best_score
 
-def get_auth(request: Request):
-    auth = request.headers.get("authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(401, "Not authenticated")
-    payload = decode_token(auth.split(" ")[1])
-    if not payload:
-        raise HTTPException(401, "Invalid token")
-    return payload
-
-@router.post("/register")
-async def register_student(
-    request:    Request,
-    name:       str        = Form(...),
-    roll_no:    str        = Form(...),
-    section_id: int        = Form(...),
-    phone:      str        = Form(""),
-    photo:      UploadFile = File(...),
-):
-    get_auth(request)
-    img_bytes = await photo.read()
-    embedding, img = extract_embedding(img_bytes)
-    if embedding is None:
-        raise HTTPException(400, "No face detected. Use a clearer front-facing photo.")
-
-    conn = get_connection()
+def mark_attendance_db(student_id, section_id, faculty_id, method):
+    today = date.today().strftime('%Y-%m-%d')
+    time_ = datetime.now().strftime('%H:%M:%S')
+    conn  = get_connection()
     try:
-        conn.execute(
-            "INSERT INTO students (name, roll_no, section_id, phone) VALUES (?,?,?,?)",
-            (name, roll_no, section_id, phone)
-        )
+        conn.execute('''
+            INSERT INTO attendance (student_id, section_id, faculty_id, date, time, method)
+            VALUES (?,?,?,?,?,?)
+        ''', (student_id, section_id, faculty_id, today, time_, method))
         conn.commit()
-        student_id = conn.execute(
-            "SELECT id FROM students WHERE roll_no=?", (roll_no,)
-        ).fetchone()['id']
-    except Exception as e:
+        return True
+    except Exception:
+        return False
+    finally:
         conn.close()
-        raise HTTPException(400, f"Roll number already exists or DB error: {str(e)}")
 
-    img_path = os.path.join(KNOWN_FACES, f"{roll_no}.jpg")
-    cv2.imwrite(img_path, img)
-
-    encodings = load_encodings()
-    encodings[roll_no] = {
-        "name":       name,
-        "student_id": student_id,
-        "section_id": section_id,
-        "embedding":  embedding
-    }
-    save_encodings(encodings)
+def save_unknown(img_crop, faculty_id, section_id, method):
+    ts   = datetime.now().strftime('%Y%m%d_%H%M%S')
+    path = os.path.join(UNKNOWN_PATH, f"unknown_{ts}.jpg")
+    cv2.imwrite(path, img_crop)
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO unknown_logs (snapshot_path, faculty_id, section_id, method) VALUES (?,?,?,?)",
+        (path, faculty_id, section_id, method)
+    )
+    conn.commit()
     conn.close()
-    return {"message": f"{name} registered successfully", "student_id": student_id}
+    return path
+
+@router.post("/process")
+async def process_attendance(
+    request:    Request,
+    photo:      UploadFile = File(...),
+    section_id: int        = Form(...),
+    faculty_id: int        = Form(...),
+    method:     str        = Form("webcam"),
+    threshold:  float      = Form(0.5)
+):
+    img_bytes = await photo.read()
+    arr = np.frombuffer(img_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(400, "Could not read image")
+
+    model   = get_model()
+    faces   = model.get(img)
+    results = []
+
+    for face in faces:
+        x1, y1, x2, y2 = [int(v) for v in face.bbox]
+        roll_no, name, student_id, sec_id, similarity = identify_face(
+            face.embedding, section_id, threshold
+        )
+        if name == "Unknown":
+            crop = img[max(0,y1):y2, max(0,x1):x2]
+            if crop.size > 0:
+                save_unknown(crop, faculty_id, section_id, method)
+            status = "unknown"
+            color  = (0, 0, 255)
+        else:
+            marked = mark_attendance_db(student_id, section_id, faculty_id, method)
+            status = "marked" if marked else "already_marked"
+            color  = (0, 255, 0) if marked else (0, 165, 255)
+
+        cv2.rectangle(img, (x1,y1), (x2,y2), color, 2)
+        label = f"{name} ({similarity:.2f})"
+        cv2.putText(img, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        results.append({
+            "name": name, "roll_no": roll_no,
+            "similarity": round(similarity, 3),
+            "status": status, "bbox": [x1, y1, x2, y2]
+        })
+
+    if method == "classroom":
+        ts       = datetime.now().strftime('%Y%m%d_%H%M%S')
+        out_path = os.path.join(CLASSROOM_PATH, f"class_{ts}.jpg")
+        cv2.imwrite(out_path, img)
+
+    import base64
+    _, buffer  = cv2.imencode('.jpg', img)
+    img_base64 = base64.b64encode(buffer).decode('utf-8')
+
+    summary = {
+        "total_faces":    len(results),
+        "marked":         sum(1 for r in results if r['status'] == 'marked'),
+        "already_marked": sum(1 for r in results if r['status'] == 'already_marked'),
+        "unknown":        sum(1 for r in results if r['status'] == 'unknown'),
+    }
+    return {"results": results, "summary": summary, "annotated_image": f"data:image/jpeg;base64,{img_base64}"}
 
 @router.get("/section/{section_id}")
-def get_students_by_section(section_id: int):
+def get_section_attendance(section_id: int, date_str: str = None):
+    if not date_str:
+        date_str = date.today().strftime('%Y-%m-%d')
     conn = get_connection()
     rows = conn.execute('''
-        SELECT s.id, s.name, s.roll_no, s.phone, s.registered_at, s.parent_email, s.parent_name, s.parent_phone,
-               sec.name as section_name
-        FROM students s
-        JOIN sections sec ON sec.id = s.section_id
-        WHERE s.section_id = ?
-        ORDER BY s.name
+        SELECT s.name, s.roll_no, a.time, a.method, a.date
+        FROM attendance a JOIN students s ON s.id = a.student_id
+        WHERE a.section_id = ? AND a.date = ? ORDER BY a.time
+    ''', (section_id, date_str)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+@router.get("/section/{section_id}/summary")
+def get_section_summary(section_id: int):
+    conn = get_connection()
+    rows = conn.execute('''
+        SELECT s.name, s.roll_no, COUNT(a.id) as total_present
+        FROM students s LEFT JOIN attendance a ON a.student_id = s.id
+        WHERE s.section_id = ? GROUP BY s.id ORDER BY s.name
     ''', (section_id,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
-@router.delete("/{student_id}")
-def delete_student(student_id: int):
+@router.get("/section/{section_id}/dates")
+def get_attendance_dates(section_id: int):
     conn = get_connection()
-    student = conn.execute("SELECT roll_no FROM students WHERE id=?", (student_id,)).fetchone()
-    if not student:
-        raise HTTPException(404, "Student not found")
-    roll_no = student['roll_no']
-    conn.execute("DELETE FROM attendance WHERE student_id=?", (student_id,))
-    conn.execute("DELETE FROM students WHERE id=?", (student_id,))
-    conn.commit()
+    rows = conn.execute('''
+        SELECT date, COUNT(*) as present_count
+        FROM attendance WHERE section_id = ?
+        GROUP BY date ORDER BY date DESC
+    ''', (section_id,)).fetchall()
     conn.close()
+    return [dict(r) for r in rows]
 
-    img_path = os.path.join(KNOWN_FACES, f"{roll_no}.jpg")
-    if os.path.exists(img_path):
-        os.remove(img_path)
-
-    encodings = load_encodings()
-    if roll_no in encodings:
-        del encodings[roll_no]
-        save_encodings(encodings)
-    return {"message": "Student deleted successfully"}
-
-@router.put("/{student_id}")
-async def update_student(
-    request:      Request,
-    student_id:   int,
-    name:         str        = Form(...),
-    roll_no:      str        = Form(...),
-    phone:        str        = Form(""),
-    parent_email: str        = Form(""),
-    parent_name:  str        = Form(""),
-    parent_phone: str        = Form(""),
-    photo:        UploadFile = File(None),
-):
-    get_auth(request)
-    conn = get_connection()
-    student = conn.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
-    if not student:
-        conn.close()
-        raise HTTPException(404, "Student not found")
-
-    old_roll = student['roll_no']
-    conn.execute(
-        "UPDATE students SET name=?, phone=?, parent_email=?, parent_name=?, parent_phone=? WHERE id=?",
-        (name, phone, parent_email, parent_name, parent_phone, student_id)
-    )
-    conn.commit()
-
-    if photo and photo.filename:
-        img_bytes = await photo.read()
-        if img_bytes:
-            embedding, img = extract_embedding(img_bytes)
-            if embedding is None:
-                conn.close()
-                raise HTTPException(400, "No face detected in new photo.")
-            img_path = os.path.join(KNOWN_FACES, f"{old_roll}.jpg")
-            cv2.imwrite(img_path, img)
-            encodings = load_encodings()
-            if old_roll in encodings:
-                encodings[old_roll]['name']      = name
-                encodings[old_roll]['embedding'] = embedding
-                save_encodings(encodings)
-
+@router.get("/unknown-logs")
+def get_unknown_logs(faculty_id: int = None):
+    conn   = get_connection()
+    query  = "SELECT * FROM unknown_logs"
+    params = []
+    if faculty_id:
+        query += " WHERE faculty_id = ?"
+        params.append(faculty_id)
+    query += " ORDER BY detected_at DESC LIMIT 50"
+    rows = conn.execute(query, params).fetchall()
     conn.close()
-    return {"message": f"{name} updated successfully"}
+    return [dict(r) for r in rows]
