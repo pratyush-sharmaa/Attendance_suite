@@ -25,11 +25,18 @@ if TURSO_URL and TURSO_TOKEN:
         def keys(self):
             return self._data.keys()
 
+        def values(self):
+            return self._data.values()
+
+        def items(self):
+            return self._data.items()
+
         def get(self, key, default=None):
             return self._data.get(key, default)
 
         def __iter__(self):
-            return iter(self._list)
+            # Makes dict(row) work — iterates over keys
+            return iter(self._data)
 
     class TursoCursor:
         def __init__(self, raw_cursor):
@@ -51,7 +58,7 @@ if TURSO_URL and TURSO_TOKEN:
             self._conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
 
         def execute(self, sql, params=()):
-            # libsql requires tuple, not list
+            # libsql requires tuple not list
             raw = self._conn.execute(sql, tuple(params))
             return TursoCursor(raw)
 
@@ -59,7 +66,7 @@ if TURSO_URL and TURSO_TOKEN:
             self._conn.commit()
 
         def close(self):
-            pass  # keep connection alive
+            pass
 
     def get_connection():
         return TursoConnection()
@@ -165,7 +172,7 @@ def init_db():
 
     conn.commit()
 
-    # ── Migrations: add missing columns ───────────────────────
+    # ── Migrations: safely add missing columns ────────────────
     for col, defval in [
         ('parent_email', "''"),
         ('parent_name',  "''"),
@@ -176,7 +183,7 @@ def init_db():
             conn.execute(f"ALTER TABLE students ADD COLUMN {col} TEXT DEFAULT {defval}")
             conn.commit()
         except Exception:
-            pass  # already exists — safe to ignore
+            pass  # already exists
 
     # ── Default admin ─────────────────────────────────────────
     from auth import hash_password
