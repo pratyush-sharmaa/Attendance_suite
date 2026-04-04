@@ -1,6 +1,5 @@
 import os
 
-# ── Turso (cloud) or local SQLite fallback ────────────────────
 TURSO_URL   = os.environ.get("TURSO_DATABASE_URL", "")
 TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "")
 
@@ -9,44 +8,58 @@ if TURSO_URL and TURSO_TOKEN:
 
     class TursoRow:
         def __init__(self, row, description):
-            self._data = {description[i][0]: row[i] for i in range(len(row))} if row else {}
-            self._list = list(row) if row else []
+            self._data = {}
+            self._list = []
+            if row is not None and description:
+                self._list = list(row)
+                self._data = {description[i][0]: row[i] for i in range(len(description))}
+
         def __getitem__(self, key):
-            if isinstance(key, int): return self._list[key]
+            if isinstance(key, int):
+                return self._list[key]
             return self._data[key]
-        def __contains__(self, key): return key in self._data
-        def keys(self): return self._data.keys()
-        def get(self, key, default=None): return self._data.get(key, default)
+
+        def __contains__(self, key):
+            return key in self._data
+
+        def keys(self):
+            return self._data.keys()
+
+        def get(self, key, default=None):
+            return self._data.get(key, default)
+
+        def __iter__(self):
+            return iter(self._list)
 
     class TursoCursor:
-        def __init__(self, conn):
-            self._conn = conn
-            self.description = None
-            self._rows = []
-        def execute(self, sql, params=()):
-            self._conn.execute(sql, list(params))
-            self.description = []
-            self._rows = []
-            return self
+        def __init__(self, raw_cursor):
+            self._cursor = raw_cursor
+            self.description = raw_cursor.description or []
+
         def fetchone(self):
-            r = self._conn.execute("SELECT * FROM (VALUES(NULL)) LIMIT 0")  # dummy
-            rows = self._conn.fetchall() if hasattr(self._conn, 'fetchall') else []
-            return TursoRow(rows[0], self.description) if rows else None
+            row = self._cursor.fetchone()
+            if row is None:
+                return None
+            return TursoRow(row, self.description)
+
         def fetchall(self):
-            return [TursoRow(r, self.description) for r in self._conn.fetchall()] if hasattr(self._conn, 'fetchall') else []
+            rows = self._cursor.fetchall()
+            return [TursoRow(r, self.description) for r in rows]
 
     class TursoConnection:
         def __init__(self):
             self._conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+
         def execute(self, sql, params=()):
-            result = self._conn.execute(sql, list(params))
-            cur = TursoCursor(self)
-            cur._conn = result
-            cur.description = result.description or []
-            return cur
-        def commit(self): self._conn.commit()
-        def close(self): pass
-        def fetchall(self): return []
+            # libsql requires tuple, not list
+            raw = self._conn.execute(sql, tuple(params))
+            return TursoCursor(raw)
+
+        def commit(self):
+            self._conn.commit()
+
+        def close(self):
+            pass  # keep connection alive
 
     def get_connection():
         return TursoConnection()
@@ -152,7 +165,7 @@ def init_db():
 
     conn.commit()
 
-    # ── Migrations: add missing columns to existing tables ─────
+    # ── Migrations: add missing columns ───────────────────────
     for col, defval in [
         ('parent_email', "''"),
         ('parent_name',  "''"),
@@ -163,12 +176,14 @@ def init_db():
             conn.execute(f"ALTER TABLE students ADD COLUMN {col} TEXT DEFAULT {defval}")
             conn.commit()
         except Exception:
-            pass  # already exists
+            pass  # already exists — safe to ignore
 
-    # ── Default admin ──────────────────────────────────────────
+    # ── Default admin ─────────────────────────────────────────
     from auth import hash_password
     try:
-        existing = conn.execute("SELECT id FROM admins WHERE username='admin'").fetchone()
+        existing = conn.execute(
+            "SELECT id FROM admins WHERE username='admin'"
+        ).fetchone()
         if not existing:
             conn.execute(
                 "INSERT INTO admins (username, password_hash) VALUES (?,?)",
