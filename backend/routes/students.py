@@ -120,23 +120,6 @@ def load_encodings():
             return pickle.load(f)
     return {}
 
-def ensure_encodings_table():
-    conn = get_connection()
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS face_encodings (
-            roll_no    TEXT PRIMARY KEY,
-            name       TEXT,
-            student_id INTEGER,
-            section_id INTEGER,
-            embedding  TEXT,
-            photo_url  TEXT DEFAULT ''
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-ensure_encodings_table()
-
 def extract_embedding(img_bytes: bytes):
     arr   = np.frombuffer(img_bytes, np.uint8)
     img   = cv2.imdecode(arr, cv2.IMREAD_COLOR)
