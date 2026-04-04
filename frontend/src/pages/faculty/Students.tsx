@@ -24,6 +24,24 @@ const emptyForm = {
 
 const P = { marginLeft: 220, flex: 1, padding: '32px 36px', minHeight: '100vh', background: 'var(--bg)' }
 
+function safeError(e: any): string {
+  try {
+    const detail = e?.response?.data?.detail
+    if (!detail) return 'Request failed — please try again'
+    if (typeof detail === 'string') return detail
+    if (Array.isArray(detail)) {
+      return detail.map((d: any) => {
+        if (typeof d === 'string') return d
+        if (typeof d?.msg === 'string') return d.msg
+        return 'Validation error'
+      }).join(' · ')
+    }
+    return 'Something went wrong'
+  } catch {
+    return 'Something went wrong'
+  }
+}
+
 export default function FacultyStudents() {
   const [sections,        setSections]        = useState<Section[]>([])
   const [selectedSection, setSelectedSection] = useState<Section | null>(null)
@@ -78,7 +96,6 @@ export default function FacultyStudents() {
       parent_phone: s.parent_phone || '',
     })
     setPhoto(null)
-    // Show existing photo from Cloudinary
     setPreview(s.photo_url && s.photo_url.length > 0 ? s.photo_url : null)
     setShowForm(true)
   }
@@ -116,10 +133,10 @@ export default function FacultyStudents() {
       fd.append('parent_email', form.parent_email)
       fd.append('parent_name',  form.parent_name)
       fd.append('parent_phone', form.parent_phone)
-      fd.append('section_id',   String(selectedSection.id))  // always send
+      fd.append('section_id',   String(selectedSection.id))
 
       if (editStudent) {
-        if (photo) fd.append('photo', photo)  // only if changed
+        if (photo) fd.append('photo', photo)
         await api.put(`/api/students/${editStudent.id}`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' }
         })
@@ -135,13 +152,7 @@ export default function FacultyStudents() {
       closeForm()
       loadStudents(selectedSection)
     } catch (e: any) {
-      const detail = e.response?.data?.detail
-      if (Array.isArray(detail)) {
-        // Pydantic validation errors — extract messages
-        showToast(detail.map((d: any) => d.msg).join(', '), 'error')
-      } else {
-        showToast(typeof detail === 'string' ? detail : 'Failed — check face photo is clear', 'error')
-      }
+      showToast(safeError(e), 'error')
     } finally {
       setSaving(false)
     }
@@ -153,7 +164,9 @@ export default function FacultyStudents() {
       await api.delete(`/api/students/${id}`)
       showToast(`${name} removed`)
       if (selectedSection) loadStudents(selectedSection)
-    } catch { showToast('Failed to delete', 'error') }
+    } catch (e: any) {
+      showToast(safeError(e), 'error')
+    }
   }
 
   const filtered = students.filter(s =>
@@ -224,7 +237,11 @@ export default function FacultyStudents() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div>
                   <label style={{ display: 'block', marginBottom: 6, fontSize: '0.65rem', color: 'var(--text3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Full Name *</label>
-                  <input placeholder="Student full name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+                  <input
+                    placeholder="Student full name"
+                    value={form.name}
+                    onChange={e => setForm({ ...form, name: e.target.value })}
+                  />
                 </div>
                 <div>
                   <label style={{ display: 'block', marginBottom: 6, fontSize: '0.65rem', color: 'var(--text3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Roll Number *</label>
@@ -243,22 +260,41 @@ export default function FacultyStudents() {
                 </div>
                 <div>
                   <label style={{ display: 'block', marginBottom: 6, fontSize: '0.65rem', color: 'var(--text3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Phone</label>
-                  <input placeholder="+91 98765 43210" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} />
+                  <input
+                    placeholder="+91 98765 43210"
+                    value={form.phone}
+                    onChange={e => setForm({ ...form, phone: e.target.value })}
+                  />
                 </div>
                 <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
-                  <div style={{ fontSize: '0.62rem', color: 'var(--text3)', fontFamily: 'var(--mono)', letterSpacing: '0.08em', marginBottom: 10, textTransform: 'uppercase' }}>Parent Contact</div>
+                  <div style={{ fontSize: '0.62rem', color: 'var(--text3)', fontFamily: 'var(--mono)', letterSpacing: '0.08em', marginBottom: 10, textTransform: 'uppercase' }}>
+                    Parent Contact
+                  </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <input type="email" placeholder="Parent email" value={form.parent_email} onChange={e => setForm({ ...form, parent_email: e.target.value })} />
-                    <input placeholder="Parent name" value={form.parent_name} onChange={e => setForm({ ...form, parent_name: e.target.value })} />
-                    <input placeholder="Parent phone" value={form.parent_phone} onChange={e => setForm({ ...form, parent_phone: e.target.value })} />
+                    <input
+                      type="email"
+                      placeholder="Parent email"
+                      value={form.parent_email}
+                      onChange={e => setForm({ ...form, parent_email: e.target.value })}
+                    />
+                    <input
+                      placeholder="Parent name"
+                      value={form.parent_name}
+                      onChange={e => setForm({ ...form, parent_name: e.target.value })}
+                    />
+                    <input
+                      placeholder="Parent phone"
+                      value={form.parent_phone}
+                      onChange={e => setForm({ ...form, parent_phone: e.target.value })}
+                    />
                   </div>
                 </div>
               </div>
 
-              {/* Right — photo (same UI for both add and edit) */}
+              {/* Right — photo (identical UI for add and edit) */}
               <div>
                 <label style={{ display: 'block', marginBottom: 10, fontSize: '0.65rem', color: 'var(--text3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                  {editStudent ? 'Face Photo — click to update' : 'Face Photo — required *'}
+                  Face Photo {editStudent ? '— click to update' : '— required *'}
                 </label>
 
                 <div
@@ -278,14 +314,21 @@ export default function FacultyStudents() {
                         src={preview}
                         alt="preview"
                         style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                        onError={e => {
+                          e.currentTarget.style.display = 'none'
+                          setPreview(null)
+                        }}
                       />
                       <div className="bracket bracket-tl" />
                       <div className="bracket bracket-tr" />
                       <div className="bracket bracket-bl" />
                       <div className="bracket bracket-br" />
                       <div style={{ position: 'absolute', bottom: 8, left: 0, right: 0, textAlign: 'center' }}>
-                        <span style={{ fontSize: '0.62rem', color: 'var(--accent)', fontFamily: 'var(--mono)', background: 'rgba(0,0,0,0.8)', padding: '3px 12px', borderRadius: 99, letterSpacing: '0.06em' }}>
-                          {photo ? '✓ NEW PHOTO SELECTED · CLICK TO CHANGE' : 'CURRENT PHOTO · CLICK TO CHANGE'}
+                        <span style={{
+                          fontSize: '0.62rem', color: 'var(--accent)', fontFamily: 'var(--mono)',
+                          background: 'rgba(0,0,0,0.8)', padding: '3px 12px', borderRadius: 99, letterSpacing: '0.06em'
+                        }}>
+                          {photo ? '✓ NEW PHOTO · CLICK TO CHANGE' : 'CURRENT PHOTO · CLICK TO CHANGE'}
                         </span>
                       </div>
                     </>
@@ -310,13 +353,12 @@ export default function FacultyStudents() {
                   style={{ display: 'none' }}
                 />
 
-                {/* Status hint below photo box */}
                 <div style={{ marginTop: 8, fontSize: '0.65rem', fontFamily: 'var(--mono)' }}>
                   {!editStudent && !photo && (
                     <span style={{ color: 'var(--red)' }}>✕ PHOTO REQUIRED TO REGISTER</span>
                   )}
                   {editStudent && !photo && preview && (
-                    <span style={{ color: 'var(--green)' }}>✓ EXISTING PHOTO WILL BE KEPT</span>
+                    <span style={{ color: 'var(--green)' }}>✓ EXISTING PHOTO KEPT — CLICK TO CHANGE</span>
                   )}
                   {editStudent && !photo && !preview && (
                     <span style={{ color: 'var(--accent)' }}>⚠ NO PHOTO ON FILE — PLEASE UPLOAD ONE</span>
