@@ -32,10 +32,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Count helper (works with both Turso and SQLite) ───────────
+def count(conn, sql, params=()):
+    row = conn.execute(sql, params).fetchone()
+    try:    return row['c']
+    except: return row[0]
+
 # ── Startup ───────────────────────────────────────────────────
 @app.on_event("startup")
 def startup():
     init_db()
+    # Auto-restore face encodings from DB to local pkl on every boot
+    try:
+        import pickle
+        from routes.students import load_encodings, ENCODINGS_PATH
+        encodings = load_encodings()
+        if encodings:
+            os.makedirs(os.path.dirname(ENCODINGS_PATH), exist_ok=True)
+            with open(ENCODINGS_PATH, 'wb') as f:
+                pickle.dump(encodings, f)
+            print(f"✅ Restored {len(encodings)} face encodings from DB")
+        else:
+            print("⚠️ No face encodings in DB yet")
+    except Exception as e:
+        print(f"⚠️ Could not restore encodings: {e}")
 
 # ── Auth dependency ───────────────────────────────────────────
 def get_current_user(authorization: str = Header(None)):
@@ -211,17 +231,18 @@ def delete_section(section_id: int, user=Depends(require_admin)):
     conn.close()
     return {"message": "Section deleted"}
 
+# ── Admin stats ───────────────────────────────────────────────
 @app.get("/api/admin/stats")
 def admin_stats(user=Depends(require_admin)):
     from datetime import date
     today = date.today().strftime('%Y-%m-%d')
     conn = get_connection()
     stats = {
-        "total_faculties": conn.execute("SELECT COUNT(*) FROM faculties").fetchone()[0],
-        "total_sections":  conn.execute("SELECT COUNT(*) FROM sections").fetchone()[0],
-        "total_students":  conn.execute("SELECT COUNT(*) FROM students").fetchone()[0],
-        "present_today":   conn.execute("SELECT COUNT(*) FROM attendance WHERE date=?", (today,)).fetchone()[0],
-        "unknown_today":   conn.execute("SELECT COUNT(*) FROM unknown_logs WHERE DATE(detected_at)=?", (today,)).fetchone()[0],
+        "total_faculties": count(conn, "SELECT COUNT(*) as c FROM faculties"),
+        "total_sections":  count(conn, "SELECT COUNT(*) as c FROM sections"),
+        "total_students":  count(conn, "SELECT COUNT(*) as c FROM students"),
+        "present_today":   count(conn, "SELECT COUNT(*) as c FROM attendance WHERE date=?", (today,)),
+        "unknown_today":   count(conn, "SELECT COUNT(*) as c FROM unknown_logs WHERE DATE(detected_at)=?", (today,)),
     }
     conn.close()
     return stats
@@ -249,6 +270,7 @@ def get_section_students(section_id: int, user=Depends(require_faculty)):
     conn.close()
     return [dict(r) for r in rows]
 
+# ── Faculty stats ─────────────────────────────────────────────
 @app.get("/api/faculty/stats")
 def faculty_stats(user=Depends(require_faculty)):
     from datetime import date
@@ -256,10 +278,10 @@ def faculty_stats(user=Depends(require_faculty)):
     today = date.today().strftime('%Y-%m-%d')
     conn = get_connection()
     stats = {
-        "my_sections":   conn.execute("SELECT COUNT(*) FROM sections WHERE faculty_id=?", (faculty_id,)).fetchone()[0],
-        "my_students":   conn.execute("SELECT COUNT(*) FROM students s JOIN sections sec ON sec.id=s.section_id WHERE sec.faculty_id=?", (faculty_id,)).fetchone()[0],
-        "marked_today":  conn.execute("SELECT COUNT(*) FROM attendance WHERE faculty_id=? AND date=?", (faculty_id, today)).fetchone()[0],
-        "unknown_today": conn.execute("SELECT COUNT(*) FROM unknown_logs WHERE faculty_id=? AND DATE(detected_at)=?", (faculty_id, today)).fetchone()[0],
+        "my_sections":   count(conn, "SELECT COUNT(*) as c FROM sections WHERE faculty_id=?", (faculty_id,)),
+        "my_students":   count(conn, "SELECT COUNT(*) as c FROM students s JOIN sections sec ON sec.id=s.section_id WHERE sec.faculty_id=?", (faculty_id,)),
+        "marked_today":  count(conn, "SELECT COUNT(*) as c FROM attendance WHERE faculty_id=? AND date=?", (faculty_id, today)),
+        "unknown_today": count(conn, "SELECT COUNT(*) as c FROM unknown_logs WHERE faculty_id=? AND DATE(detected_at)=?", (faculty_id, today)),
     }
     conn.close()
     return stats
