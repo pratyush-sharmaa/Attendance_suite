@@ -78,8 +78,8 @@ export default function FacultyStudents() {
       parent_phone: s.parent_phone || '',
     })
     setPhoto(null)
-    // Show existing Cloudinary photo in preview
-    setPreview(s.photo_url || null)
+    // Show existing photo from Cloudinary
+    setPreview(s.photo_url && s.photo_url.length > 0 ? s.photo_url : null)
     setShowForm(true)
   }
 
@@ -100,7 +100,6 @@ export default function FacultyStudents() {
     if (!form.name || !form.roll_no) {
       showToast('Name and roll number are required', 'error'); return
     }
-    // Photo is compulsory for new registrations
     if (!editStudent && !photo) {
       showToast('A face photo is required to register a student', 'error'); return
     }
@@ -117,16 +116,15 @@ export default function FacultyStudents() {
       fd.append('parent_email', form.parent_email)
       fd.append('parent_name',  form.parent_name)
       fd.append('parent_phone', form.parent_phone)
+      fd.append('section_id',   String(selectedSection.id))  // always send
 
       if (editStudent) {
-        fd.append('section_id', String(selectedSection.id))
-        if (photo) fd.append('photo', photo)
+        if (photo) fd.append('photo', photo)  // only if changed
         await api.put(`/api/students/${editStudent.id}`, fd, {
           headers: { 'Content-Type': 'multipart/form-data' }
         })
         showToast(`${form.name} updated`)
       } else {
-        fd.append('section_id', String(selectedSection.id))
         fd.append('photo', photo!)
         await api.post('/api/students/register', fd, {
           headers: { 'Content-Type': 'multipart/form-data' }
@@ -137,7 +135,13 @@ export default function FacultyStudents() {
       closeForm()
       loadStudents(selectedSection)
     } catch (e: any) {
-      showToast(e.response?.data?.detail || 'Failed — check face photo is clear', 'error')
+      const detail = e.response?.data?.detail
+      if (Array.isArray(detail)) {
+        // Pydantic validation errors — extract messages
+        showToast(detail.map((d: any) => d.msg).join(', '), 'error')
+      } else {
+        showToast(typeof detail === 'string' ? detail : 'Failed — check face photo is clear', 'error')
+      }
     } finally {
       setSaving(false)
     }
@@ -211,10 +215,7 @@ export default function FacultyStudents() {
         {showForm && selectedSection && (
           <div className="card" style={{ marginBottom: 20, borderColor: 'var(--accentBorder)' }}>
             <div style={{ fontSize: '0.65rem', color: 'var(--accent)', fontFamily: 'var(--mono)', letterSpacing: '0.1em', marginBottom: 20 }}>
-              {editStudent
-                ? `EDITING — ${editStudent.name}`
-                : `REGISTER IN ${selectedSection.name}`
-              }
+              {editStudent ? `EDITING — ${editStudent.name}` : `REGISTER IN ${selectedSection.name}`}
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 28, marginBottom: 20 }}>
@@ -234,14 +235,16 @@ export default function FacultyStudents() {
                     disabled={!!editStudent}
                     style={{ opacity: editStudent ? 0.4 : 1, fontFamily: 'var(--mono)' } as React.CSSProperties}
                   />
-                  {editStudent && <p style={{ color: 'var(--text3)', fontSize: '0.65rem', marginTop: 4, fontFamily: 'var(--mono)' }}>ROLL NUMBER CANNOT BE CHANGED</p>}
+                  {editStudent && (
+                    <p style={{ color: 'var(--text3)', fontSize: '0.62rem', marginTop: 4, fontFamily: 'var(--mono)' }}>
+                      ROLL NUMBER CANNOT BE CHANGED
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label style={{ display: 'block', marginBottom: 6, fontSize: '0.65rem', color: 'var(--text3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Phone</label>
                   <input placeholder="+91 98765 43210" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} />
                 </div>
-
-                {/* Parent info */}
                 <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
                   <div style={{ fontSize: '0.62rem', color: 'var(--text3)', fontFamily: 'var(--mono)', letterSpacing: '0.08em', marginBottom: 10, textTransform: 'uppercase' }}>Parent Contact</div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -252,10 +255,10 @@ export default function FacultyStudents() {
                 </div>
               </div>
 
-              {/* Right — photo */}
+              {/* Right — photo (same UI for both add and edit) */}
               <div>
                 <label style={{ display: 'block', marginBottom: 10, fontSize: '0.65rem', color: 'var(--text3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                  {editStudent ? 'Update Photo — optional' : 'Face Photo — required *'}
+                  {editStudent ? 'Face Photo — click to update' : 'Face Photo — required *'}
                 </label>
 
                 <div
@@ -276,14 +279,13 @@ export default function FacultyStudents() {
                         alt="preview"
                         style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                       />
-                      {/* Corner brackets */}
                       <div className="bracket bracket-tl" />
                       <div className="bracket bracket-tr" />
                       <div className="bracket bracket-bl" />
                       <div className="bracket bracket-br" />
                       <div style={{ position: 'absolute', bottom: 8, left: 0, right: 0, textAlign: 'center' }}>
-                        <span style={{ fontSize: '0.62rem', color: 'var(--accent)', fontFamily: 'var(--mono)', background: 'rgba(0,0,0,0.75)', padding: '3px 10px', borderRadius: 99, letterSpacing: '0.06em' }}>
-                          {photo ? 'NEW PHOTO SELECTED' : 'CURRENT PHOTO — CLICK TO CHANGE'}
+                        <span style={{ fontSize: '0.62rem', color: 'var(--accent)', fontFamily: 'var(--mono)', background: 'rgba(0,0,0,0.8)', padding: '3px 12px', borderRadius: 99, letterSpacing: '0.06em' }}>
+                          {photo ? '✓ NEW PHOTO SELECTED · CLICK TO CHANGE' : 'CURRENT PHOTO · CLICK TO CHANGE'}
                         </span>
                       </div>
                     </>
@@ -291,14 +293,15 @@ export default function FacultyStudents() {
                     <div style={{ textAlign: 'center', color: 'var(--text3)', padding: 20 }}>
                       <div style={{ fontSize: '2.5rem', marginBottom: 10, opacity: 0.4 }}>◉</div>
                       <div style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', letterSpacing: '0.06em', marginBottom: 6 }}>
-                        {editStudent ? 'CLICK TO UPLOAD NEW PHOTO' : 'CLICK TO UPLOAD PHOTO *'}
+                        CLICK TO UPLOAD PHOTO
                       </div>
                       <div style={{ fontFamily: 'var(--mono)', fontSize: '0.62rem', opacity: 0.5, lineHeight: 1.8 }}>
-                        FACE MUST BE CLEARLY VISIBLE<br />GOOD LIGHTING · NO GLASSES
+                        FACE CLEARLY VISIBLE · GOOD LIGHTING
                       </div>
                     </div>
                   )}
                 </div>
+
                 <input
                   id="photo-input"
                   type="file"
@@ -307,21 +310,21 @@ export default function FacultyStudents() {
                   style={{ display: 'none' }}
                 />
 
-                {!editStudent && !photo && (
-                  <p style={{ marginTop: 8, fontSize: '0.65rem', color: 'var(--red)', fontFamily: 'var(--mono)' }}>
-                    ✕ PHOTO IS REQUIRED FOR REGISTRATION
-                  </p>
-                )}
-                {editStudent && !photo && preview && (
-                  <p style={{ marginTop: 8, fontSize: '0.65rem', color: 'var(--green)', fontFamily: 'var(--mono)' }}>
-                    ✓ EXISTING PHOTO WILL BE KEPT
-                  </p>
-                )}
-                {photo && (
-                  <p style={{ marginTop: 8, fontSize: '0.65rem', color: 'var(--accent)', fontFamily: 'var(--mono)' }}>
-                    ✓ NEW PHOTO READY — {photo.name}
-                  </p>
-                )}
+                {/* Status hint below photo box */}
+                <div style={{ marginTop: 8, fontSize: '0.65rem', fontFamily: 'var(--mono)' }}>
+                  {!editStudent && !photo && (
+                    <span style={{ color: 'var(--red)' }}>✕ PHOTO REQUIRED TO REGISTER</span>
+                  )}
+                  {editStudent && !photo && preview && (
+                    <span style={{ color: 'var(--green)' }}>✓ EXISTING PHOTO WILL BE KEPT</span>
+                  )}
+                  {editStudent && !photo && !preview && (
+                    <span style={{ color: 'var(--accent)' }}>⚠ NO PHOTO ON FILE — PLEASE UPLOAD ONE</span>
+                  )}
+                  {photo && (
+                    <span style={{ color: 'var(--accent)' }}>✓ {photo.name}</span>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -390,7 +393,6 @@ export default function FacultyStudents() {
                     </td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        {/* Photo or initials */}
                         <div style={{
                           width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
                           overflow: 'hidden', border: '1px solid var(--accentBorder)',
@@ -402,10 +404,7 @@ export default function FacultyStudents() {
                               src={s.photo_url}
                               alt={s.name}
                               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                              onError={e => {
-                                // Fallback to initials if image fails to load
-                                e.currentTarget.style.display = 'none'
-                              }}
+                              onError={e => { e.currentTarget.style.display = 'none' }}
                             />
                           ) : (
                             <span style={{ fontWeight: 700, fontSize: 12, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>
