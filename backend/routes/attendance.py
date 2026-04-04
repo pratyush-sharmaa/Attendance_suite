@@ -10,6 +10,7 @@ from datetime import date, datetime
 import cv2
 import numpy as np
 import pickle
+import base64
 
 router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
 
@@ -23,7 +24,34 @@ os.makedirs(CLASSROOM_PATH, exist_ok=True)
 
 from face_model import get_model
 
+# ── Load encodings from DB first, fall back to pkl ────────────
 def load_encodings():
+    try:
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT roll_no, name, student_id, section_id, embedding, photo_url FROM face_encodings"
+        ).fetchall()
+        conn.close()
+        if rows:
+            result = {}
+            for r in rows:
+                try:
+                    emb = pickle.loads(base64.b64decode(r['embedding'].encode('utf-8')))
+                    result[r['roll_no']] = {
+                        'name':       r['name'],
+                        'student_id': r['student_id'],
+                        'section_id': r['section_id'],
+                        'embedding':  emb,
+                        'photo_url':  r['photo_url'] if r['photo_url'] else '',
+                    }
+                except Exception:
+                    continue
+            if result:
+                return result
+    except Exception as e:
+        print(f"⚠️ Could not load encodings from DB: {e}")
+
+    # Fall back to pkl file
     if os.path.exists(ENCODINGS_PATH):
         with open(ENCODINGS_PATH, 'rb') as f:
             return pickle.load(f)
@@ -98,7 +126,7 @@ async def process_attendance(
     for face in faces:
         x1, y1, x2, y2 = [int(v) for v in face.bbox]
         roll_no, name, student_id, sec_id, similarity = identify_face(
-            face.embedding, section_id, threshold
+            face.normed_embedding, section_id, threshold
         )
         if name == "Unknown":
             crop = img[max(0,y1):y2, max(0,x1):x2]
@@ -115,9 +143,11 @@ async def process_attendance(
         label = f"{name} ({similarity:.2f})"
         cv2.putText(img, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         results.append({
-            "name": name, "roll_no": roll_no,
+            "name":       name,
+            "roll_no":    roll_no,
             "similarity": round(similarity, 3),
-            "status": status, "bbox": [x1, y1, x2, y2]
+            "status":     status,
+            "bbox":       [x1, y1, x2, y2]
         })
 
     if method == "classroom":
@@ -125,7 +155,6 @@ async def process_attendance(
         out_path = os.path.join(CLASSROOM_PATH, f"class_{ts}.jpg")
         cv2.imwrite(out_path, img)
 
-    import base64
     _, buffer  = cv2.imencode('.jpg', img)
     img_base64 = base64.b64encode(buffer).decode('utf-8')
 
@@ -135,7 +164,11 @@ async def process_attendance(
         "already_marked": sum(1 for r in results if r['status'] == 'already_marked'),
         "unknown":        sum(1 for r in results if r['status'] == 'unknown'),
     }
-    return {"results": results, "summary": summary, "annotated_image": f"data:image/jpeg;base64,{img_base64}"}
+    return {
+        "results":          results,
+        "summary":          summary,
+        "annotated_image":  f"data:image/jpeg;base64,{img_base64}"
+    }
 
 @router.get("/section/{section_id}")
 def get_section_attendance(section_id: int, date_str: str = None):
