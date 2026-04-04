@@ -6,181 +6,337 @@ os.environ['OMP_NUM_THREADS'] = '1'
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from database import get_connection
 from auth import decode_token
-from datetime import date, datetime
+from typing import Optional
 import cv2
 import numpy as np
 import pickle
+import base64
 
-router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
+router = APIRouter(prefix="/api/students", tags=["Students"])
 
 BASE_DIR       = os.path.join(os.path.dirname(__file__), '..')
+KNOWN_FACES    = os.path.join(BASE_DIR, 'known_faces')
 ENCODINGS_PATH = os.path.join(BASE_DIR, 'encodings', 'encodings.pkl')
-UNKNOWN_PATH   = os.path.join(BASE_DIR, 'unknown_faces')
-CLASSROOM_PATH = os.path.join(BASE_DIR, 'classroom_outputs')
 
-os.makedirs(UNKNOWN_PATH,   exist_ok=True)
-os.makedirs(CLASSROOM_PATH, exist_ok=True)
+os.makedirs(KNOWN_FACES, exist_ok=True)
+os.makedirs(os.path.dirname(ENCODINGS_PATH), exist_ok=True)
 
 from face_model import get_model
 
+# ── Cloudinary setup ──────────────────────────────────────────
+CLOUDINARY_CLOUD = os.environ.get('CLOUDINARY_CLOUD_NAME', '')
+CLOUDINARY_KEY   = os.environ.get('CLOUDINARY_API_KEY', '')
+CLOUDINARY_SEC   = os.environ.get('CLOUDINARY_API_SECRET', '')
+USE_CLOUDINARY   = bool(CLOUDINARY_CLOUD and CLOUDINARY_KEY and CLOUDINARY_SEC)
+
+if USE_CLOUDINARY:
+    import cloudinary
+    import cloudinary.uploader
+    cloudinary.config(cloud_name=CLOUDINARY_CLOUD, api_key=CLOUDINARY_KEY, api_secret=CLOUDINARY_SEC)
+
+def upload_photo(img_bytes: bytes, roll_no: str) -> str:
+    if USE_CLOUDINARY:
+        import cloudinary.uploader
+        result = cloudinary.uploader.upload(
+            img_bytes,
+            public_id=f"students/{roll_no}",
+            overwrite=True,
+            folder="face_attendance"
+        )
+        return result['secure_url']
+    else:
+        arr  = np.frombuffer(img_bytes, np.uint8)
+        img  = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        path = os.path.join(KNOWN_FACES, f"{roll_no}.jpg")
+        cv2.imwrite(path, img)
+        return path
+
+def delete_photo(roll_no: str):
+    if USE_CLOUDINARY:
+        try:
+            import cloudinary.uploader
+            cloudinary.uploader.destroy(f"face_attendance/students/{roll_no}")
+        except Exception:
+            pass
+    else:
+        path = os.path.join(KNOWN_FACES, f"{roll_no}.jpg")
+        if os.path.exists(path):
+            os.remove(path)
+
+# ── Encoding helpers — DB-backed ──────────────────────────────
+def embedding_to_str(embedding) -> str:
+    """Serialize numpy array to base64 string for DB storage"""
+    return base64.b64encode(pickle.dumps(embedding)).decode('utf-8')
+
+def str_to_embedding(s: str):
+    """Deserialize base64 string back to numpy array"""
+    return pickle.loads(base64.b64decode(s.encode('utf-8')))
+
+def save_encoding_db(roll_no: str, name: str, student_id: int, section_id: int, embedding, photo_url: str = ''):
+    conn = get_connection()
+    emb_str = embedding_to_str(embedding)
+    conn.execute('''
+        INSERT INTO face_encodings (roll_no, name, student_id, section_id, embedding, photo_url)
+        VALUES (?,?,?,?,?,?)
+        ON CONFLICT(roll_no) DO UPDATE SET
+            name=excluded.name, embedding=excluded.embedding,
+            photo_url=excluded.photo_url
+    ''', (roll_no, name, student_id, section_id, emb_str, photo_url))
+    conn.commit()
+    conn.close()
+
+def delete_encoding_db(roll_no: str):
+    conn = get_connection()
+    conn.execute('DELETE FROM face_encodings WHERE roll_no=?', (roll_no,))
+    conn.commit()
+    conn.close()
+
 def load_encodings():
+    """Load from DB first, fall back to pkl file"""
+    conn = get_connection()
+    try:
+        rows = conn.execute('SELECT * FROM face_encodings').fetchall()
+        conn.close()
+        if rows:
+            encodings = {}
+            for r in rows:
+                try:
+                    encodings[r['roll_no']] = {
+                        'name':       r['name'],
+                        'student_id': r['student_id'],
+                        'section_id': r['section_id'],
+                        'embedding':  str_to_embedding(r['embedding']),
+                        'photo_url':  r['photo_url'] or ''
+                    }
+                except Exception:
+                    pass
+            return encodings
+    except Exception:
+        conn.close()
+
+    # Fallback to pkl file
     if os.path.exists(ENCODINGS_PATH):
         with open(ENCODINGS_PATH, 'rb') as f:
             return pickle.load(f)
     return {}
 
-def cosine_similarity(a, b):
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
-
-def identify_face(embedding, section_id=None, threshold=0.5):
-    encodings  = load_encodings()
-    best       = None
-    best_score = -1
-    for roll_no, data in encodings.items():
-        if section_id and data.get('section_id') != section_id:
-            continue
-        score = cosine_similarity(embedding, data['embedding'])
-        if score > best_score:
-            best_score = score
-            best = (roll_no, data['name'], data['student_id'], data.get('section_id'))
-    if best and best_score >= threshold:
-        return (*best, best_score)
-    return "unknown", "Unknown", None, None, best_score
-
-def mark_attendance_db(student_id, section_id, faculty_id, method):
-    today = date.today().strftime('%Y-%m-%d')
-    time_ = datetime.now().strftime('%H:%M:%S')
-    conn  = get_connection()
-    try:
-        conn.execute('''
-            INSERT INTO attendance (student_id, section_id, faculty_id, date, time, method)
-            VALUES (?,?,?,?,?,?)
-        ''', (student_id, section_id, faculty_id, today, time_, method))
-        conn.commit()
-        return True
-    except Exception:
-        return False
-    finally:
-        conn.close()
-
-def save_unknown(img_crop, faculty_id, section_id, method):
-    ts   = datetime.now().strftime('%Y%m%d_%H%M%S')
-    path = os.path.join(UNKNOWN_PATH, f"unknown_{ts}.jpg")
-    cv2.imwrite(path, img_crop)
+def ensure_encodings_table():
     conn = get_connection()
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS face_encodings (
+            roll_no    TEXT PRIMARY KEY,
+            name       TEXT,
+            student_id INTEGER,
+            section_id INTEGER,
+            embedding  TEXT,
+            photo_url  TEXT DEFAULT ''
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+ensure_encodings_table()
+
+def extract_embedding(img_bytes: bytes):
+    arr   = np.frombuffer(img_bytes, np.uint8)
+    img   = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    faces = get_model().get(img)
+    if not faces:
+        return None, None
+    face = sorted(faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]), reverse=True)[0]
+    return face.embedding, img
+
+def get_auth(request: Request):
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(401, "Not authenticated")
+    payload = decode_token(auth.split(" ")[1])
+    if not payload:
+        raise HTTPException(401, "Invalid token")
+    return payload
+
+@router.post("/register")
+async def register_student(
+    request:      Request,
+    name:         str        = Form(...),
+    roll_no:      str        = Form(...),
+    section_id:   int        = Form(...),
+    phone:        str        = Form(""),
+    parent_email: str        = Form(""),
+    parent_name:  str        = Form(""),
+    parent_phone: str        = Form(""),
+    photo:        UploadFile = File(...),
+):
+    get_auth(request)
+    img_bytes = await photo.read()
+    embedding, img = extract_embedding(img_bytes)
+    if embedding is None:
+        raise HTTPException(400, "No face detected. Use a clearer front-facing photo.")
+
+    photo_url = upload_photo(img_bytes, roll_no)
+
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO students (name, roll_no, section_id, phone, parent_email, parent_name, parent_phone, photo_url) VALUES (?,?,?,?,?,?,?,?)",
+            (name, roll_no, section_id, phone, parent_email, parent_name, parent_phone, photo_url)
+        )
+        conn.commit()
+        student_id = conn.execute(
+            "SELECT id FROM students WHERE roll_no=?", (roll_no,)
+        ).fetchone()['id']
+    except Exception as e:
+        conn.close()
+        raise HTTPException(400, f"Roll number already exists or DB error: {str(e)}")
+    conn.close()
+
+    # Save local copy for runtime recognition
+    local_path = os.path.join(KNOWN_FACES, f"{roll_no}.jpg")
+    cv2.imwrite(local_path, img)
+
+    # Save encoding to DB (persists across redeploys)
+    save_encoding_db(roll_no, name, student_id, section_id, embedding, photo_url)
+
+    return {"message": f"{name} registered successfully", "student_id": student_id, "photo_url": photo_url}
+
+@router.get("/section/{section_id}")
+def get_students_by_section(section_id: int):
+    conn = get_connection()
+    rows = conn.execute('''
+        SELECT s.id, s.name, s.roll_no, s.phone, s.registered_at,
+               s.parent_email, s.parent_name, s.parent_phone, s.photo_url,
+               sec.name as section_name
+        FROM students s
+        JOIN sections sec ON sec.id = s.section_id
+        WHERE s.section_id = ?
+        ORDER BY s.name
+    ''', (section_id,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+@router.delete("/{student_id}")
+def delete_student(student_id: int):
+    conn = get_connection()
+    student = conn.execute("SELECT roll_no FROM students WHERE id=?", (student_id,)).fetchone()
+    if not student:
+        raise HTTPException(404, "Student not found")
+    roll_no = student['roll_no']
+    conn.execute("DELETE FROM attendance WHERE student_id=?", (student_id,))
+    conn.execute("DELETE FROM students WHERE id=?", (student_id,))
+    conn.commit()
+    conn.close()
+
+    delete_photo(roll_no)
+    delete_encoding_db(roll_no)
+    return {"message": "Student deleted successfully"}
+
+@router.put("/{student_id}")
+async def update_student(
+    request:      Request,
+    student_id:   int,
+    name:         str        = Form(...),
+    roll_no:      str        = Form(...),
+    phone:        str        = Form(""),
+    parent_email: str        = Form(""),
+    parent_name:  str        = Form(""),
+    parent_phone: str        = Form(""),
+    photo:        UploadFile = File(None),
+):
+    get_auth(request)
+    conn = get_connection()
+    student = conn.execute("SELECT * FROM students WHERE id=?", (student_id,)).fetchone()
+    if not student:
+        conn.close()
+        raise HTTPException(404, "Student not found")
+
+    old_roll  = student['roll_no']
+    photo_url = student.get('photo_url', '') or ''
+
+    if photo and photo.filename:
+        img_bytes = await photo.read()
+        if img_bytes:
+            embedding, img = extract_embedding(img_bytes)
+            if embedding is None:
+                conn.close()
+                raise HTTPException(400, "No face detected in new photo.")
+
+            photo_url = upload_photo(img_bytes, old_roll)
+
+            local_path = os.path.join(KNOWN_FACES, f"{old_roll}.jpg")
+            cv2.imwrite(local_path, img)
+
+            save_encoding_db(old_roll, name, student_id, student['section_id'], embedding, photo_url)
+
     conn.execute(
-        "INSERT INTO unknown_logs (snapshot_path, faculty_id, section_id, method) VALUES (?,?,?,?)",
-        (path, faculty_id, section_id, method)
+        "UPDATE students SET name=?, phone=?, parent_email=?, parent_name=?, parent_phone=?, photo_url=? WHERE id=?",
+        (name, phone, parent_email, parent_name, parent_phone, photo_url, student_id)
     )
     conn.commit()
     conn.close()
-    return path
+    return {"message": f"{name} updated successfully", "photo_url": photo_url}
 
-@router.post("/process")
-async def process_attendance(
-    request:    Request,
-    photo:      UploadFile = File(...),
-    section_id: int        = Form(...),
-    faculty_id: int        = Form(...),
-    method:     str        = Form("webcam"),
-    threshold:  float      = Form(0.5)
-):
-    img_bytes = await photo.read()
-    arr = np.frombuffer(img_bytes, np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if img is None:
-        raise HTTPException(400, "Could not read image")
+@router.get("/restore-encodings")
+def restore_encodings_from_db():
+    """Restore local pkl from DB encodings — call after redeploy if needed"""
+    encodings = load_encodings()
+    if encodings:
+        with open(ENCODINGS_PATH, 'wb') as f:
+            pickle.dump(encodings, f)
+    return {"message": f"Restored {len(encodings)} encodings from DB"}
 
-    model   = get_model()
-    faces   = model.get(img)
-    results = []
+@router.post("/migrate-encodings")
+async def migrate_encodings_from_cloudinary():
+    """
+    Re-download all student photos from Cloudinary and rebuild face encodings in DB.
+    Call once after deploy if encodings are missing.
+    """
+    import httpx
 
-    for face in faces:
-        x1, y1, x2, y2 = [int(v) for v in face.bbox]
-        roll_no, name, student_id, sec_id, similarity = identify_face(
-            face.embedding, section_id, threshold
-        )
-        if name == "Unknown":
-            crop = img[max(0,y1):y2, max(0,x1):x2]
-            if crop.size > 0:
-                save_unknown(crop, faculty_id, section_id, method)
-            status = "unknown"
-            color  = (0, 0, 255)
-        else:
-            marked = mark_attendance_db(student_id, section_id, faculty_id, method)
-            status = "marked" if marked else "already_marked"
-            color  = (0, 255, 0) if marked else (0, 165, 255)
+    conn = get_connection()
+    students = conn.execute(
+        "SELECT id, roll_no, name, section_id, photo_url FROM students WHERE photo_url != '' AND photo_url IS NOT NULL"
+    ).fetchall()
+    conn.close()
 
-        cv2.rectangle(img, (x1,y1), (x2,y2), color, 2)
-        label = f"{name} ({similarity:.2f})"
-        cv2.putText(img, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-        results.append({
-            "name": name, "roll_no": roll_no,
-            "similarity": round(similarity, 3),
-            "status": status, "bbox": [x1, y1, x2, y2]
-        })
+    success = []
+    failed  = []
 
-    if method == "classroom":
-        ts       = datetime.now().strftime('%Y%m%d_%H%M%S')
-        out_path = os.path.join(CLASSROOM_PATH, f"class_{ts}.jpg")
-        cv2.imwrite(out_path, img)
+    for s in students:
+        roll_no   = s['roll_no']
+        photo_url = s['photo_url']
 
-    import base64
-    _, buffer  = cv2.imencode('.jpg', img)
-    img_base64 = base64.b64encode(buffer).decode('utf-8')
+        # Check if encoding already exists in DB
+        enc_conn = get_connection()
+        existing = enc_conn.execute(
+            "SELECT roll_no FROM face_encodings WHERE roll_no=?", (roll_no,)
+        ).fetchone()
+        enc_conn.close()
 
-    summary = {
-        "total_faces":    len(results),
-        "marked":         sum(1 for r in results if r['status'] == 'marked'),
-        "already_marked": sum(1 for r in results if r['status'] == 'already_marked'),
-        "unknown":        sum(1 for r in results if r['status'] == 'unknown'),
+        if existing:
+            success.append(f"{s['name']} (already in DB)")
+            continue
+
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(photo_url)
+            img_bytes = resp.content
+
+            embedding, img = extract_embedding(img_bytes)
+            if embedding is None:
+                failed.append(f"{s['name']} — no face detected")
+                continue
+
+            local_path = os.path.join(KNOWN_FACES, f"{roll_no}.jpg")
+            cv2.imwrite(local_path, img)
+
+            save_encoding_db(roll_no, s['name'], s['id'], s['section_id'], embedding, photo_url)
+            success.append(s['name'])
+
+        except Exception as e:
+            failed.append(f"{s['name']} — {str(e)}")
+
+    return {
+        "migrated": len(success),
+        "failed":   len(failed),
+        "details":  success + failed
     }
-    return {"results": results, "summary": summary, "annotated_image": f"data:image/jpeg;base64,{img_base64}"}
-
-@router.get("/section/{section_id}")
-def get_section_attendance(section_id: int, date_str: str = None):
-    if not date_str:
-        date_str = date.today().strftime('%Y-%m-%d')
-    conn = get_connection()
-    rows = conn.execute('''
-        SELECT s.name, s.roll_no, a.time, a.method, a.date
-        FROM attendance a JOIN students s ON s.id = a.student_id
-        WHERE a.section_id = ? AND a.date = ? ORDER BY a.time
-    ''', (section_id, date_str)).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-@router.get("/section/{section_id}/summary")
-def get_section_summary(section_id: int):
-    conn = get_connection()
-    rows = conn.execute('''
-        SELECT s.name, s.roll_no, COUNT(a.id) as total_present
-        FROM students s LEFT JOIN attendance a ON a.student_id = s.id
-        WHERE s.section_id = ? GROUP BY s.id ORDER BY s.name
-    ''', (section_id,)).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-@router.get("/section/{section_id}/dates")
-def get_attendance_dates(section_id: int):
-    conn = get_connection()
-    rows = conn.execute('''
-        SELECT date, COUNT(*) as present_count
-        FROM attendance WHERE section_id = ?
-        GROUP BY date ORDER BY date DESC
-    ''', (section_id,)).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-@router.get("/unknown-logs")
-def get_unknown_logs(faculty_id: int = None):
-    conn   = get_connection()
-    query  = "SELECT * FROM unknown_logs"
-    params = []
-    if faculty_id:
-        query += " WHERE faculty_id = ?"
-        params.append(faculty_id)
-    query += " ORDER BY detected_at DESC LIMIT 50"
-    rows = conn.execute(query, params).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
