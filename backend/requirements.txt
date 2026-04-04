@@ -13,3 +13,5 @@ Pillow==10.2.0
 pydantic==2.6.1
 python-dotenv==1.0.1
 qrcode[pil]==7.4.2
+libsql-experimental
+cloudinary
