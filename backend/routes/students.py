@@ -75,14 +75,22 @@ def str_to_embedding(s: str):
 
 def save_encoding_db(roll_no, name, student_id, section_id, embedding, photo_url=''):
     conn = get_connection()
-    conn.execute('''
-        INSERT OR REPLACE INTO face_encodings
-            (roll_no, name, student_id, section_id, embedding, photo_url)
-        VALUES (?,?,?,?,?,?)
-    ''', (roll_no, name, student_id, section_id, embedding_to_str(embedding), photo_url))
+    # Check if exists first
+    existing = conn.execute(
+        "SELECT roll_no FROM face_encodings WHERE roll_no=?", (roll_no,)
+    ).fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE face_encodings SET name=?, student_id=?, section_id=?, embedding=?, photo_url=? WHERE roll_no=?",
+            (name, student_id, section_id, embedding_to_str(embedding), photo_url, roll_no)
+        )
+    else:
+        conn.execute(
+            "INSERT INTO face_encodings (roll_no, name, student_id, section_id, embedding, photo_url) VALUES (?,?,?,?,?,?)",
+            (roll_no, name, student_id, section_id, embedding_to_str(embedding), photo_url)
+        )
     conn.commit()
     conn.close()
-
 def delete_encoding_db(roll_no):
     conn = get_connection()
     conn.execute('DELETE FROM face_encodings WHERE roll_no=?', (roll_no,))
@@ -246,12 +254,13 @@ async def update_student(
     parent_name:  str                  = Form(""),
     parent_phone: str                  = Form(""),
     section_id:   int                  = Form(...),
-    photo:        Optional[UploadFile] = File(None),  # optional on edit
+    photo:        Optional[UploadFile] = File(None),
 ):
     get_auth(request)
     conn = get_connection()
     existing = conn.execute(
-        "SELECT * FROM students WHERE id=?", (student_id,)
+        "SELECT id, name, roll_no, section_id, phone, parent_email, parent_name, parent_phone, photo_url FROM students WHERE id=?",
+        (student_id,)
     ).fetchone()
     if not existing:
         conn.close()
@@ -285,8 +294,7 @@ async def update_student(
     conn.commit()
     conn.close()
     return {"message": f"{name} updated successfully", "photo_url": photo_url}
-
-
+    
 @router.get("/restore-encodings")
 def restore_encodings_from_db():
     encodings = load_encodings()
