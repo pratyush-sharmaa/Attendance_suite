@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
-import { Component, type ReactNode } from 'react'
+import { Component } from 'react'
 import type { ReactNode } from 'react'
 
 import Login             from './pages/Login'
