@@ -3,12 +3,12 @@ import Sidebar from '../../components/Sidebar'
 import api from '../../api'
 
 const NAV = [
-  { icon: '▪', label: 'Dashboard',     path: '/faculty' },
-  { icon: '▪', label: 'Students',      path: '/faculty/students' },
-  { icon: '▪', label: 'Attendance',    path: '/faculty/attendance' },
-  { icon: '▪', label: 'QR Attendance', path: '/faculty/qr' },
-  { icon: '▪', label: 'Alerts',        path: '/faculty/alerts' },
-  { icon: '▪', label: 'Reports',       path: '/faculty/reports' },
+  { icon: '📊', label: 'Dashboard',     path: '/faculty' },
+  { icon: '👨‍🎓', label: 'Students',      path: '/faculty/students' },
+  { icon: '📷', label: 'Attendance',    path: '/faculty/attendance' },
+  { icon: '📱', label: 'QR Attendance', path: '/faculty/qr' },
+  { icon: '📧', label: 'Alerts',        path: '/faculty/alerts' },
+  { icon: '📋', label: 'Reports',       path: '/faculty/reports' },
 ]
 
 interface Section { id: number; name: string; department: string; student_count: number }
@@ -21,8 +21,6 @@ const emptyForm = {
   name: '', roll_no: '', phone: '',
   parent_email: '', parent_name: '', parent_phone: ''
 }
-
-const P = { marginLeft: 220, flex: 1, padding: '32px 36px', minHeight: '100vh', background: 'var(--bg)' }
 
 function safeError(e: any): string {
   try {
@@ -118,10 +116,10 @@ export default function FacultyStudents() {
       showToast('Name and roll number are required', 'error'); return
     }
     if (!editStudent && !photo) {
-      showToast('A face photo is required to register a student', 'error'); return
+      showToast('Please upload a face photo', 'error'); return
     }
     if (!selectedSection) {
-      showToast('No section selected', 'error'); return
+      showToast('Please select a section', 'error'); return
     }
 
     setSaving(true)
@@ -137,16 +135,12 @@ export default function FacultyStudents() {
 
       if (editStudent) {
         if (photo) fd.append('photo', photo)
-        await api.put(`/api/students/${editStudent.id}`, fd, {
-          headers: { 'Content-Type': 'multipart/form-data' }
-        })
-        showToast(`${form.name} updated`)
+        await api.put(`/api/students/${editStudent.id}`, fd)
+        showToast(`✅ ${form.name} updated!`)
       } else {
         fd.append('photo', photo!)
-        await api.post('/api/students/register', fd, {
-          headers: { 'Content-Type': 'multipart/form-data' }
-        })
-        showToast(`${form.name} registered`)
+        await api.post('/api/students/register', fd)
+        showToast(`✅ ${form.name} registered!`)
       }
 
       closeForm()
@@ -162,7 +156,7 @@ export default function FacultyStudents() {
     if (!confirm(`Remove "${name}"? This also removes their face data.`)) return
     try {
       await api.delete(`/api/students/${id}`)
-      showToast(`${name} removed`)
+      showToast(`🗑️ ${name} removed`)
       if (selectedSection) loadStudents(selectedSection)
     } catch (e: any) {
       showToast(safeError(e), 'error')
@@ -175,24 +169,22 @@ export default function FacultyStudents() {
   )
 
   return (
-    <div style={{ display: 'flex', background: 'var(--bg)', minHeight: '100vh' }}>
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#0a0a0f' }}>
       <Sidebar items={NAV} />
-      <div style={P}>
+
+      <div style={{ marginLeft: 240, flex: 1, padding: '32px 36px' }}>
 
         {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-              <div style={{ width: 3, height: 24, background: 'var(--accent)', borderRadius: 99 }} />
-              <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text)', letterSpacing: '-0.02em' }}>Students</h1>
-            </div>
-            <p style={{ color: 'var(--text3)', fontSize: '0.72rem', fontFamily: 'var(--mono)', paddingLeft: 13 }}>FACE REGISTRATION & MANAGEMENT</p>
+            <h1 style={{ fontSize: '1.6rem', fontWeight: 700, color: '#e2e8f0' }}>👨‍🎓 Students</h1>
+            <p style={{ color: '#475569', marginTop: 4, fontSize: '0.875rem' }}>Register and manage students with face recognition</p>
           </div>
           <button
             className="btn-primary"
             onClick={showForm ? closeForm : openAdd}
             disabled={sections.length === 0}
-            style={{ opacity: sections.length === 0 ? 0.4 : 1 }}
+            style={{ opacity: sections.length === 0 ? 0.5 : 1 }}
           >
             {showForm ? '✕ Cancel' : '+ Register Student'}
           </button>
@@ -200,25 +192,28 @@ export default function FacultyStudents() {
 
         {/* No sections warning */}
         {sections.length === 0 && (
-          <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid var(--accentBorder)', borderRadius: 'var(--radius2)', padding: '12px 16px', color: 'var(--accent2)', marginBottom: 20, fontSize: '0.82rem', fontFamily: 'var(--mono)' }}>
-            ⚠ NO SECTIONS ASSIGNED — CONTACT ADMIN
+          <div style={{
+            background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)',
+            borderRadius: 12, padding: '16px 20px', color: '#fbbf24',
+            marginBottom: 24, fontSize: '0.875rem'
+          }}>
+            ⚠️ No sections assigned yet. Ask admin to assign sections.
           </div>
         )}
 
         {/* Section tabs */}
         {sections.length > 0 && (
-          <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 24, flexWrap: 'wrap' }}>
             {sections.map(sec => (
               <button key={sec.id} onClick={() => { loadStudents(sec); closeForm() }} style={{
-                padding: '7px 16px', borderRadius: 6, cursor: 'pointer',
-                fontWeight: 700, fontSize: '0.75rem', fontFamily: 'var(--mono)', letterSpacing: '0.04em',
-                transition: 'all 0.15s',
-                background: selectedSection?.id === sec.id ? 'var(--accent)' : 'rgba(255,255,255,0.04)',
-                color: selectedSection?.id === sec.id ? '#000' : 'var(--text3)',
-                border: selectedSection?.id === sec.id ? '1px solid transparent' : '1px solid var(--border2)',
+                padding: '8px 18px', borderRadius: 20, border: 'none', cursor: 'pointer',
+                fontWeight: 600, fontSize: '0.85rem', transition: 'all 0.2s',
+                background: selectedSection?.id === sec.id
+                  ? 'linear-gradient(135deg,#6366f1,#8b5cf6)' : 'rgba(255,255,255,0.06)',
+                color: selectedSection?.id === sec.id ? 'white' : '#64748b'
               }}>
-                {sec.name}
-                <span style={{ marginLeft: 6, opacity: 0.6, fontWeight: 400 }}>({sec.student_count})</span>
+                🏫 {sec.name}
+                <span style={{ opacity: 0.7, marginLeft: 4 }}>({sec.student_count})</span>
               </button>
             ))}
           </div>
@@ -226,155 +221,111 @@ export default function FacultyStudents() {
 
         {/* Register / Edit Form */}
         {showForm && selectedSection && (
-          <div className="card" style={{ marginBottom: 20, borderColor: 'var(--accentBorder)' }}>
-            <div style={{ fontSize: '0.65rem', color: 'var(--accent)', fontFamily: 'var(--mono)', letterSpacing: '0.1em', marginBottom: 20 }}>
-              {editStudent ? `EDITING — ${editStudent.name}` : `REGISTER IN ${selectedSection.name}`}
-            </div>
+          <div className="card" style={{ marginBottom: 24 }}>
+            <h3 style={{ color: '#e2e8f0', marginBottom: 24, fontWeight: 600 }}>
+              {editStudent
+                ? <>✏️ Edit — <span style={{ color: '#818cf8' }}>{editStudent.name}</span></>
+                : <>➕ Register in <span style={{ color: '#818cf8' }}>{selectedSection.name}</span></>
+              }
+            </h3>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 28, marginBottom: 20 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 20 }}>
 
               {/* Left — fields */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div>
-                  <label style={{ display: 'block', marginBottom: 6, fontSize: '0.65rem', color: 'var(--text3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Full Name *</label>
-                  <input
-                    placeholder="Student full name"
-                    value={form.name}
-                    onChange={e => setForm({ ...form, name: e.target.value })}
-                  />
+                  <label style={{ display: 'block', marginBottom: 6, fontSize: '0.8rem', color: '#94a3b8' }}>Full Name *</label>
+                  <input placeholder="Student full name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
                 </div>
                 <div>
-                  <label style={{ display: 'block', marginBottom: 6, fontSize: '0.65rem', color: 'var(--text3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Roll Number *</label>
+                  <label style={{ display: 'block', marginBottom: 6, fontSize: '0.8rem', color: '#94a3b8' }}>Roll Number *</label>
                   <input
-                    placeholder="CS2024001"
+                    placeholder="e.g. CS2024001"
                     value={form.roll_no}
-                    onChange={e => setForm({ ...form, roll_no: e.target.value.toUpperCase() })}
+                    onChange={e => setForm({ ...form, roll_no: e.target.value })}
                     disabled={!!editStudent}
-                    style={{ opacity: editStudent ? 0.4 : 1, fontFamily: 'var(--mono)' } as React.CSSProperties}
+                    style={{ opacity: editStudent ? 0.5 : 1 }}
                   />
-                  {editStudent && (
-                    <p style={{ color: 'var(--text3)', fontSize: '0.62rem', marginTop: 4, fontFamily: 'var(--mono)' }}>
-                      ROLL NUMBER CANNOT BE CHANGED
-                    </p>
-                  )}
+                  {editStudent && <p style={{ color: '#334155', fontSize: '0.72rem', marginTop: 4 }}>Roll number cannot be changed</p>}
                 </div>
                 <div>
-                  <label style={{ display: 'block', marginBottom: 6, fontSize: '0.65rem', color: 'var(--text3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Phone</label>
-                  <input
-                    placeholder="+91 98765 43210"
-                    value={form.phone}
-                    onChange={e => setForm({ ...form, phone: e.target.value })}
-                  />
-                </div>
-                <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
-                  <div style={{ fontSize: '0.62rem', color: 'var(--text3)', fontFamily: 'var(--mono)', letterSpacing: '0.08em', marginBottom: 10, textTransform: 'uppercase' }}>
-                    Parent Contact
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <input
-                      type="email"
-                      placeholder="Parent email"
-                      value={form.parent_email}
-                      onChange={e => setForm({ ...form, parent_email: e.target.value })}
-                    />
-                    <input
-                      placeholder="Parent name"
-                      value={form.parent_name}
-                      onChange={e => setForm({ ...form, parent_name: e.target.value })}
-                    />
-                    <input
-                      placeholder="Parent phone"
-                      value={form.parent_phone}
-                      onChange={e => setForm({ ...form, parent_phone: e.target.value })}
-                    />
-                  </div>
+                  <label style={{ display: 'block', marginBottom: 6, fontSize: '0.8rem', color: '#94a3b8' }}>Student Phone</label>
+                  <input placeholder="Optional" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} />
                 </div>
               </div>
 
-              {/* Right — photo (identical UI for add and edit) */}
+              {/* Right — photo */}
               <div>
-                <label style={{ display: 'block', marginBottom: 10, fontSize: '0.65rem', color: 'var(--text3)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                  Face Photo {editStudent ? '— click to update' : '— required *'}
+                <label style={{ display: 'block', marginBottom: 6, fontSize: '0.8rem', color: '#94a3b8' }}>
+                  {editStudent ? 'Update Face Photo (optional)' : 'Face Photo * (clear, front-facing)'}
                 </label>
-
-                <div
-                  onClick={() => document.getElementById('photo-input')?.click()}
-                  style={{
-                    border: `1px dashed ${preview ? 'var(--accent)' : 'var(--border2)'}`,
-                    borderRadius: 12, overflow: 'hidden',
-                    background: preview ? 'transparent' : 'var(--accentDim)',
-                    cursor: 'pointer', transition: 'all 0.2s',
-                    height: 250, display: 'flex', alignItems: 'center',
-                    justifyContent: 'center', position: 'relative',
-                  }}
-                >
+                <label style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                  border: '2px dashed rgba(99,102,241,0.4)', borderRadius: 12, padding: 20,
+                  textAlign: 'center', cursor: 'pointer', minHeight: 180,
+                  background: 'rgba(99,102,241,0.04)', position: 'relative', overflow: 'hidden'
+                }}>
+                  <input type="file" accept="image/*" onChange={handlePhotoChange} style={{ display: 'none' }} />
                   {preview ? (
                     <>
                       <img
                         src={preview}
                         alt="preview"
-                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                        onError={e => {
-                          e.currentTarget.style.display = 'none'
-                          setPreview(null)
-                        }}
+                        style={{ width: 130, height: 130, borderRadius: '50%', objectFit: 'cover', border: '3px solid #6366f1' }}
+                        onError={e => { e.currentTarget.style.display = 'none'; setPreview(null) }}
                       />
-                      <div className="bracket bracket-tl" />
-                      <div className="bracket bracket-tr" />
-                      <div className="bracket bracket-bl" />
-                      <div className="bracket bracket-br" />
-                      <div style={{ position: 'absolute', bottom: 8, left: 0, right: 0, textAlign: 'center' }}>
-                        <span style={{
-                          fontSize: '0.62rem', color: 'var(--accent)', fontFamily: 'var(--mono)',
-                          background: 'rgba(0,0,0,0.8)', padding: '3px 12px', borderRadius: 99, letterSpacing: '0.06em'
-                        }}>
-                          {photo ? '✓ NEW PHOTO · CLICK TO CHANGE' : 'CURRENT PHOTO · CLICK TO CHANGE'}
-                        </span>
-                      </div>
+                      <p style={{ color: '#475569', fontSize: '0.75rem', marginTop: 10 }}>
+                        {photo ? '✅ New photo selected' : '📷 Current photo — click to change'}
+                      </p>
                     </>
                   ) : (
-                    <div style={{ textAlign: 'center', color: 'var(--text3)', padding: 20 }}>
-                      <div style={{ fontSize: '2.5rem', marginBottom: 10, opacity: 0.4 }}>◉</div>
-                      <div style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', letterSpacing: '0.06em', marginBottom: 6 }}>
-                        CLICK TO UPLOAD PHOTO
+                    <>
+                      <div style={{ fontSize: 36, marginBottom: 8 }}>📸</div>
+                      <div style={{ color: '#475569', fontSize: '0.85rem' }}>
+                        {editStudent ? 'Click to upload new photo' : 'Click to upload face photo'}
                       </div>
-                      <div style={{ fontFamily: 'var(--mono)', fontSize: '0.62rem', opacity: 0.5, lineHeight: 1.8 }}>
-                        FACE CLEARLY VISIBLE · GOOD LIGHTING
-                      </div>
-                    </div>
+                      {editStudent && <div style={{ color: '#334155', fontSize: '0.72rem', marginTop: 4 }}>Leave empty to keep existing</div>}
+                    </>
                   )}
+                </label>
+                {!editStudent && !photo && (
+                  <p style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: 6 }}>⚠️ Photo is required for registration</p>
+                )}
+                {editStudent && !photo && preview && (
+                  <p style={{ color: '#4ade80', fontSize: '0.75rem', marginTop: 6 }}>✅ Existing photo will be kept</p>
+                )}
+              </div>
+            </div>
+
+            {/* Parent info */}
+            <div style={{
+              background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.15)',
+              borderRadius: 12, padding: 20, marginBottom: 20
+            }}>
+              <h4 style={{ color: '#818cf8', fontSize: '0.85rem', fontWeight: 600, marginBottom: 16 }}>
+                👨‍👩‍👧 Parent / Guardian Info (for absence alerts)
+              </h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: 6, fontSize: '0.8rem', color: '#94a3b8' }}>Parent Email</label>
+                  <input type="email" placeholder="parent@gmail.com" value={form.parent_email} onChange={e => setForm({ ...form, parent_email: e.target.value })} />
                 </div>
-
-                <input
-                  id="photo-input"
-                  type="file"
-                  accept="image/*"
-                  onChange={handlePhotoChange}
-                  style={{ display: 'none' }}
-                />
-
-                <div style={{ marginTop: 8, fontSize: '0.65rem', fontFamily: 'var(--mono)' }}>
-                  {!editStudent && !photo && (
-                    <span style={{ color: 'var(--red)' }}>✕ PHOTO REQUIRED TO REGISTER</span>
-                  )}
-                  {editStudent && !photo && preview && (
-                    <span style={{ color: 'var(--green)' }}>✓ EXISTING PHOTO KEPT — CLICK TO CHANGE</span>
-                  )}
-                  {editStudent && !photo && !preview && (
-                    <span style={{ color: 'var(--accent)' }}>⚠ NO PHOTO ON FILE — PLEASE UPLOAD ONE</span>
-                  )}
-                  {photo && (
-                    <span style={{ color: 'var(--accent)' }}>✓ {photo.name}</span>
-                  )}
+                <div>
+                  <label style={{ display: 'block', marginBottom: 6, fontSize: '0.8rem', color: '#94a3b8' }}>Parent Name</label>
+                  <input placeholder="Mr. / Mrs. Sharma" value={form.parent_name} onChange={e => setForm({ ...form, parent_name: e.target.value })} />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: 6, fontSize: '0.8rem', color: '#94a3b8' }}>Parent Phone</label>
+                  <input placeholder="+91 98765 43210" value={form.parent_phone} onChange={e => setForm({ ...form, parent_phone: e.target.value })} />
                 </div>
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 10, borderTop: '1px solid var(--border)', paddingTop: 18 }}>
+            <div style={{ display: 'flex', gap: 12 }}>
               <button className="btn-primary" onClick={handleSave} disabled={saving}>
                 {saving
-                  ? <><span className="spinner" /> {editStudent ? 'Saving...' : 'Registering...'}</>
-                  : editStudent ? 'Save Changes' : 'Register Student'
+                  ? <><span className="spinner"></span> {editStudent ? 'Updating...' : 'Registering...'}</>
+                  : editStudent ? '💾 Save Changes' : '✅ Register Student'
                 }
               </button>
               <button className="btn-secondary" onClick={closeForm}>Cancel</button>
@@ -384,35 +335,29 @@ export default function FacultyStudents() {
 
         {/* Students table */}
         <div className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-            <div style={{ fontSize: '0.65rem', color: 'var(--text3)', fontFamily: 'var(--mono)', letterSpacing: '0.1em' }}>
-              {selectedSection?.name} — {filtered.length} STUDENTS
-            </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <h2 style={{ fontSize: '1rem', fontWeight: 600, color: '#e2e8f0' }}>
+              {selectedSection?.name} — {filtered.length} student{filtered.length !== 1 ? 's' : ''}
+            </h2>
             {students.length > 0 && (
-              <div style={{ width: 200 }}>
-                <input
-                  placeholder="Search name or roll no..."
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  style={{ padding: '7px 12px !important', fontSize: '0.8rem' } as React.CSSProperties}
-                />
-              </div>
+              <input
+                placeholder="🔍 Search name or roll no..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                style={{ width: 220, fontSize: '0.85rem' }}
+              />
             )}
           </div>
 
           {loading ? (
-            <div style={{ textAlign: 'center', padding: 48, color: 'var(--text3)', fontFamily: 'var(--mono)', fontSize: '0.78rem' }}>
-              <div className="spinner" style={{ margin: '0 auto 12px' }} /> LOADING...
+            <div style={{ textAlign: 'center', padding: 40, color: '#475569' }}>
+              <div className="spinner" style={{ margin: '0 auto 12px' }}></div>Loading...
             </div>
           ) : filtered.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: 48, color: 'var(--text3)' }}>
-              <div style={{ fontSize: '2rem', marginBottom: 12, opacity: 0.2 }}>◉</div>
-              <p style={{ fontFamily: 'var(--mono)', fontSize: '0.78rem', marginBottom: 16 }}>
-                {students.length === 0 ? 'NO STUDENTS REGISTERED YET' : 'NO RESULTS FOUND'}
-              </p>
-              {students.length === 0 && (
-                <button className="btn-primary" onClick={openAdd}>+ Register First Student</button>
-              )}
+            <div style={{ textAlign: 'center', padding: '48px', color: '#475569' }}>
+              <div style={{ fontSize: 48, marginBottom: 12 }}>👨‍🎓</div>
+              <p style={{ marginBottom: 16 }}>{search ? 'No match found' : 'No students yet'}</p>
+              {!search && <button className="btn-primary" onClick={openAdd}>+ Register First Student</button>}
             </div>
           ) : (
             <table>
@@ -430,15 +375,13 @@ export default function FacultyStudents() {
               <tbody>
                 {filtered.map((s, i) => (
                   <tr key={s.id}>
-                    <td style={{ fontFamily: 'var(--mono)', fontSize: '0.68rem', color: 'var(--text3)' }}>
-                      {String(i + 1).padStart(2, '0')}
-                    </td>
+                    <td style={{ color: '#334155' }}>{i + 1}</td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         <div style={{
-                          width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
-                          overflow: 'hidden', border: '1px solid var(--accentBorder)',
-                          background: 'var(--accentDim)',
+                          width: 34, height: 34, borderRadius: '50%', flexShrink: 0,
+                          overflow: 'hidden', border: '2px solid rgba(99,102,241,0.3)',
+                          background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                         }}>
                           {s.photo_url ? (
@@ -449,46 +392,35 @@ export default function FacultyStudents() {
                               onError={e => { e.currentTarget.style.display = 'none' }}
                             />
                           ) : (
-                            <span style={{ fontWeight: 700, fontSize: 12, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>
+                            <span style={{ fontWeight: 700, fontSize: 13, color: 'white' }}>
                               {s.name.charAt(0).toUpperCase()}
                             </span>
                           )}
                         </div>
-                        <span style={{ fontWeight: 600, color: 'var(--text)', fontSize: '0.875rem' }}>{s.name}</span>
+                        <span style={{ fontWeight: 500, color: '#e2e8f0' }}>{s.name}</span>
                       </div>
                     </td>
-                    <td>
-                      <span style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem', color: 'var(--accent)', background: 'var(--accentDim)', padding: '2px 8px', borderRadius: 4, border: '1px solid var(--accentBorder)' }}>
-                        {s.roll_no}
-                      </span>
-                    </td>
-                    <td style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem' }}>
+                    <td><span className="badge badge-blue">{s.roll_no}</span></td>
+                    <td style={{ fontSize: '0.8rem' }}>
                       {s.parent_email
-                        ? <span style={{ color: 'var(--green)' }}>✓ {s.parent_email}</span>
-                        : <span className="badge badge-red">MISSING</span>
+                        ? <span style={{ color: '#4ade80' }}>✅ {s.parent_email}</span>
+                        : <span style={{ color: '#ef4444' }}>⚠️ Not added</span>
                       }
                     </td>
-                    <td style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem', color: 'var(--text3)' }}>
-                      {s.phone || '—'}
-                    </td>
-                    <td style={{ fontFamily: 'var(--mono)', fontSize: '0.68rem', color: 'var(--text3)' }}>
+                    <td style={{ color: '#64748b', fontSize: '0.85rem' }}>{s.phone || '—'}</td>
+                    <td style={{ color: '#475569', fontSize: '0.78rem' }}>
                       {new Date(s.registered_at).toLocaleDateString()}
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: 8 }}>
-                        <button
-                          onClick={() => openEdit(s)}
-                          style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid var(--border2)', background: 'var(--surface)', color: 'var(--text2)', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, transition: 'all 0.15s' }}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          className="btn-danger"
-                          onClick={() => handleDelete(s.id, s.name)}
-                          style={{ padding: '5px 12px', fontSize: '0.78rem' }}
-                        >
-                          Delete
-                        </button>
+                        <button onClick={() => openEdit(s)} style={{
+                          padding: '6px 12px', borderRadius: 8,
+                          border: '1px solid rgba(99,102,241,0.3)',
+                          background: 'rgba(99,102,241,0.1)', color: '#818cf8',
+                          cursor: 'pointer', fontSize: '0.8rem', fontWeight: 500
+                        }}>✏️ Edit</button>
+                        <button className="btn-danger" onClick={() => handleDelete(s.id, s.name)}
+                          style={{ padding: '6px 12px', fontSize: '0.8rem' }}>🗑️</button>
                       </div>
                     </td>
                   </tr>
