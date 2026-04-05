@@ -16,7 +16,8 @@ import StudentAttendance from './pages/StudentAttendance'
 import EmailAlerts       from './pages/faculty/EmailAlerts'
 import ChatBot           from './components/ChatBot'
 
-class ErrorBoundary extends Component
+// ── Error Boundary ────────────────────────────────────────────
+class ErrorBoundary extends Component<
   { children: ReactNode },
   { error: string | null }
 > {
@@ -34,13 +35,15 @@ class ErrorBoundary extends Component
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           flexDirection: 'column', gap: 20, padding: 40, fontFamily: 'monospace'
         }}>
-          <div style={{ color: '#f59e0b', fontSize: '1.4rem' }}>◈ FACEATTEND</div>
+          <div style={{ color: '#f59e0b', fontSize: '1.4rem', letterSpacing: '-0.02em' }}>◈ FACEATTEND</div>
           <div style={{
             background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
             borderRadius: 10, padding: '16px 24px', color: '#f87171',
-            fontSize: '0.78rem', textAlign: 'center', maxWidth: 500, lineHeight: 2
+            fontSize: '0.78rem', textAlign: 'center', maxWidth: 500, lineHeight: 2,
+            letterSpacing: '0.04em'
           }}>
-            RENDER ERROR — {this.state.error}
+            RENDER ERROR<br />
+            {this.state.error}
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <button
@@ -56,7 +59,8 @@ class ErrorBoundary extends Component
             <button
               onClick={() => { this.setState({ error: null }); window.location.href = '/faculty' }}
               style={{
-                background: '#f59e0b', color: '#000', border: 'none', borderRadius: 8,
+                background: '#f59e0b', color: '#000',
+                border: 'none', borderRadius: 8,
                 padding: '10px 20px', fontWeight: 700, cursor: 'pointer', fontFamily: 'monospace'
               }}
             >
@@ -70,6 +74,7 @@ class ErrorBoundary extends Component
   }
 }
 
+// ── Protected Route ───────────────────────────────────────────
 interface ProtectedRouteProps {
   children: ReactNode
   role?: string
@@ -94,6 +99,7 @@ function ProtectedRoute({ children, role }: ProtectedRouteProps) {
   return <>{children}</>
 }
 
+// ── App ───────────────────────────────────────────────────────
 export default function App() {
   return (
     <AuthProvider>
@@ -101,8 +107,11 @@ export default function App() {
         <ErrorBoundary>
           <Routes>
             <Route path="/login" element={<Login />} />
+
+            {/* Public — student scans QR, no auth needed */}
             <Route path="/student-attendance" element={<StudentAttendance />} />
 
+            {/* Admin routes */}
             <Route path="/admin" element={
               <ProtectedRoute role="admin"><AdminDashboard /></ProtectedRoute>
             }/>
@@ -113,6 +122,7 @@ export default function App() {
               <ProtectedRoute role="admin"><AdminSections /></ProtectedRoute>
             }/>
 
+            {/* Faculty routes */}
             <Route path="/faculty" element={
               <ProtectedRoute role="faculty"><FacultyDashboard /></ProtectedRoute>
             }/>
@@ -132,8 +142,10 @@ export default function App() {
               <ProtectedRoute role="faculty"><EmailAlerts /></ProtectedRoute>
             }/>
 
+            {/* Fallback */}
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
+
           <ChatBotWrapper />
         </ErrorBoundary>
       </BrowserRouter>
