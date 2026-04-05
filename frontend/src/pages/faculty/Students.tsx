@@ -210,13 +210,13 @@ export default function FacultyStudents() {
           <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap' }}>
             {sections.map(sec => (
               <button key={sec.id} onClick={() => { loadStudents(sec); closeForm() }} style={{
-                padding: '7px 16px', borderRadius: 6, border: 'none', cursor: 'pointer',
+                padding: '7px 16px', borderRadius: 6, cursor: 'pointer',
                 fontWeight: 700, fontSize: '0.75rem', fontFamily: 'var(--mono)', letterSpacing: '0.04em',
                 transition: 'all 0.15s',
                 background: selectedSection?.id === sec.id ? 'var(--accent)' : 'rgba(255,255,255,0.04)',
                 color: selectedSection?.id === sec.id ? '#000' : 'var(--text3)',
-                border: selectedSection?.id === sec.id ? '1px solid transparent' : '1px solid var(--border)',
-              } as React.CSSProperties}>
+                border: selectedSection?.id === sec.id ? '1px solid transparent' : '1px solid var(--border2)',
+              }}>
                 {sec.name}
                 <span style={{ marginLeft: 6, opacity: 0.6, fontWeight: 400 }}>({sec.student_count})</span>
               </button>
