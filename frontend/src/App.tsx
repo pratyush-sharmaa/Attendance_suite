@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { Component, type ReactNode } from 'react'
-import type { ReactNode as RN } from 'react'
+import type { ReactNode } from 'react'
 
 import Login             from './pages/Login'
 import AdminDashboard    from './pages/admin/Dashboard'
