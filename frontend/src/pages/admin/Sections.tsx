@@ -69,8 +69,7 @@ export default function AdminSections() {
     sem,
     sections: sections.filter(s => s.semester === sem)
   })).filter(g => g.sections.length > 0)
-  const noSem = sections.filter(s => !s.semester)
-
+  
   const grouped = faculties.map(f => ({ faculty: f, sections: sections.filter(s => s.faculty_id === f.id) })).filter(g => g.sections.length > 0)
 
   return (
