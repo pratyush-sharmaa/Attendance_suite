@@ -30,6 +30,11 @@ def load_encodings():
             return pickle.load(f)
     return {}
 
+def load_encodings_normalized():
+    """Load encodings with keys normalized to uppercase for case-insensitive lookup."""
+    raw = load_encodings()
+    return {k.strip().upper(): v for k, v in raw.items()}
+
 def cosine_similarity(a, b):
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
@@ -95,7 +100,9 @@ async def submit_selfie(
         del _active_sessions[token]
         raise HTTPException(410, "QR code expired.")
 
+    # Normalize roll number to uppercase + stripped for consistent matching
     roll_no = roll_no.strip().upper()
+
     if roll_no in session['used_rolls']:
         raise HTTPException(409, "You have already marked attendance.")
 
@@ -103,17 +110,21 @@ async def submit_selfie(
     faculty_id = session['faculty_id']
 
     conn = get_connection()
+
+    # DB lookup using normalized roll_no (case-insensitive via UPPER())
     student = conn.execute(
-        "SELECT * FROM students WHERE roll_no=? AND section_id=?", (roll_no, section_id)
+        "SELECT * FROM students WHERE UPPER(TRIM(roll_no))=? AND section_id=?",
+        (roll_no, section_id)
     ).fetchone()
     if not student:
         conn.close()
-        raise HTTPException(404, f"Roll number '{roll_no}' not found.")
+        raise HTTPException(404, f"Roll number '{roll_no}' not found in this section.")
 
-    encodings = load_encodings()
+    # Case-insensitive encoding lookup
+    encodings = load_encodings_normalized()
     if roll_no not in encodings:
         conn.close()
-        raise HTTPException(400, "Your face is not registered.")
+        raise HTTPException(400, "Your face is not registered. Please contact your faculty.")
 
     registered_embedding = encodings[roll_no]['embedding']
 
@@ -124,14 +135,14 @@ async def submit_selfie(
 
     if not faces:
         conn.close()
-        raise HTTPException(400, "No face detected in selfie.")
+        raise HTTPException(400, "No face detected in selfie. Please retake in good lighting.")
 
     face = sorted(faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]), reverse=True)[0]
     similarity = cosine_similarity(face.embedding, registered_embedding)
 
     if similarity < 0.45:
         conn.close()
-        raise HTTPException(403, f"Face verification failed (score: {similarity:.2f}).")
+        raise HTTPException(403, f"Face verification failed (score: {similarity:.2f}). Please retake your selfie.")
 
     today = date.today().strftime('%Y-%m-%d')
     time_ = datetime.now().strftime('%H:%M:%S')
