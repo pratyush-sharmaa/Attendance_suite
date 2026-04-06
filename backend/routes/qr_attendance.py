@@ -23,15 +23,15 @@ ENCODINGS_PATH = os.path.join(BASE_DIR, 'encodings', 'encodings.pkl')
 _active_sessions: dict = {}
 
 from face_model import get_model
-
-def load_encodings():
-    if os.path.exists(ENCODINGS_PATH):
-        with open(ENCODINGS_PATH, 'rb') as f:
-            return pickle.load(f)
-    return {}
+# ── Import DB-backed helpers from students.py ─────────────────
+from routes.students import (
+    load_encodings,        # reads from Turso DB first, pkl fallback
+    extract_embedding,     # runs InsightFace on image bytes
+    str_to_embedding,      # deserializes base64 embedding from DB
+)
 
 def load_encodings_normalized():
-    """Load encodings with keys normalized to uppercase for case-insensitive lookup."""
+    """Load from Turso DB (via students.load_encodings) with uppercase keys."""
     raw = load_encodings()
     return {k.strip().upper(): v for k, v in raw.items()}
 
@@ -77,13 +77,16 @@ def validate_token(token: str):
         del _active_sessions[token]
         raise HTTPException(410, "QR code has expired.")
     conn = get_connection()
-    section = conn.execute("SELECT name, department FROM sections WHERE id=?", (session['section_id'],)).fetchone()
+    section = conn.execute(
+        "SELECT name, department FROM sections WHERE id=?",
+        (session['section_id'],)
+    ).fetchone()
     conn.close()
     return {
         "valid": True,
         "section_name": section['name'] if section else "Unknown",
-        "department": section['department'] if section else "",
-        "expires_at": session['expires_at'].isoformat(),
+        "department":   section['department'] if section else "",
+        "expires_at":   session['expires_at'].isoformat(),
         "already_marked": list(session['used_rolls'])
     }
 
@@ -100,7 +103,6 @@ async def submit_selfie(
         del _active_sessions[token]
         raise HTTPException(410, "QR code expired.")
 
-    # Normalize roll number to uppercase + stripped for consistent matching
     roll_no = roll_no.strip().upper()
 
     if roll_no in session['used_rolls']:
@@ -109,61 +111,75 @@ async def submit_selfie(
     section_id = session['section_id']
     faculty_id = session['faculty_id']
 
+    # ── 1. Find student in DB ─────────────────────────────────
     conn = get_connection()
-
-    # DB lookup using normalized roll_no (case-insensitive via UPPER())
     student = conn.execute(
-        "SELECT * FROM students WHERE UPPER(TRIM(roll_no))=? AND section_id=?",
+        "SELECT id, name, roll_no FROM students WHERE UPPER(TRIM(roll_no))=? AND section_id=?",
         (roll_no, section_id)
     ).fetchone()
+    conn.close()
+
     if not student:
-        conn.close()
-        raise HTTPException(404, f"Roll number '{roll_no}' not found in this section.")
+        raise HTTPException(404, f"Roll number '{roll_no}' not found in this section. Please check your roll number.")
 
-    # Case-insensitive encoding lookup
-    encodings = load_encodings_normalized()
-    if roll_no not in encodings:
-        conn.close()
-        raise HTTPException(400, "Your face is not registered. Please contact your faculty.")
+    # ── 2. Load embedding from Turso DB directly ──────────────
+    conn2 = get_connection()
+    enc_row = conn2.execute(
+        "SELECT embedding FROM face_encodings WHERE UPPER(TRIM(roll_no))=?",
+        (roll_no,)
+    ).fetchone()
+    conn2.close()
 
-    registered_embedding = encodings[roll_no]['embedding']
+    if not enc_row or not enc_row['embedding']:
+        raise HTTPException(400, "Your face photo is not registered. Please ask your faculty to register your photo first.")
 
+    registered_embedding = str_to_embedding(enc_row['embedding'])
+
+    # ── 3. Extract embedding from submitted selfie ────────────
     img_bytes = await selfie.read()
-    arr   = np.frombuffer(img_bytes, np.uint8)
-    img   = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    faces = get_model().get(img)
+    if not img_bytes:
+        raise HTTPException(400, "Empty photo received.")
 
-    if not faces:
-        conn.close()
-        raise HTTPException(400, "No face detected in selfie. Please retake in good lighting.")
+    selfie_embedding, _ = extract_embedding(img_bytes)
+    if selfie_embedding is None:
+        raise HTTPException(400, "No face detected in your selfie. Please retake in good lighting, facing the camera.")
 
-    face = sorted(faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]), reverse=True)[0]
-    similarity = cosine_similarity(face.embedding, registered_embedding)
+    # ── 4. Compare embeddings ─────────────────────────────────
+    similarity = cosine_similarity(selfie_embedding, registered_embedding)
 
     if similarity < 0.45:
-        conn.close()
-        raise HTTPException(403, f"Face verification failed (score: {similarity:.2f}). Please retake your selfie.")
+        raise HTTPException(403, f"Face verification failed (score: {similarity:.2f}). Please retake your selfie in good lighting.")
 
+    # ── 5. Mark attendance ────────────────────────────────────
     today = date.today().strftime('%Y-%m-%d')
     time_ = datetime.now().strftime('%H:%M:%S')
+    conn3 = get_connection()
     try:
-        conn.execute(
+        conn3.execute(
             "INSERT INTO attendance (student_id, section_id, faculty_id, date, time, method) VALUES (?,?,?,?,?,?)",
-            (student['id'], section_id, faculty_id, today, time_, 'qr_selfie')
+            (student['id'], section_id, faculty_id, today, time_, 'qr')
         )
-        conn.commit()
+        conn3.commit()
         already = False
     except Exception:
         already = True
-    conn.close()
+    conn3.close()
 
     session['used_rolls'].add(roll_no)
-    session['marked'].append({"name": student['name'], "roll_no": roll_no, "time": time_, "score": round(similarity, 3)})
+    session['marked'].append({
+        "name":    student['name'],
+        "roll_no": roll_no,
+        "time":    time_,
+        "score":   round(similarity, 3)
+    })
 
     return {
-        "success": True, "name": student['name'], "roll_no": roll_no,
-        "similarity": round(similarity, 3), "already": already,
-        "message": "Already marked earlier today" if already else "Attendance marked successfully! ✅"
+        "success":    True,
+        "name":       student['name'],
+        "roll_no":    roll_no,
+        "similarity": round(similarity, 3),
+        "already":    already,
+        "message":    "Already marked earlier today" if already else "Attendance marked successfully!"
     }
 
 @router.get("/session/{token}")
@@ -173,9 +189,11 @@ def get_session_status(token: str):
         return {"active": False, "marked": []}
     expired = datetime.now() > session['expires_at']
     return {
-        "active": not expired, "expires_at": session['expires_at'].isoformat(),
-        "marked": session['marked'], "marked_count": len(session['marked']),
-        "section_id": session['section_id']
+        "active":        not expired,
+        "expires_at":    session['expires_at'].isoformat(),
+        "marked":        session['marked'],
+        "marked_count":  len(session['marked']),
+        "section_id":    session['section_id']
     }
 
 @router.delete("/session/{token}")
