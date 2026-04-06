@@ -23,7 +23,7 @@ os.makedirs(os.path.dirname(ENCODINGS_PATH), exist_ok=True)
 
 from face_model import get_model
 
-# ── Cloudinary setup ──────────────────────────────────────────
+# ── Cloudinary ────────────────────────────────────────────────
 CLOUDINARY_CLOUD = os.environ.get('CLOUDINARY_CLOUD_NAME', '')
 CLOUDINARY_KEY   = os.environ.get('CLOUDINARY_API_KEY', '')
 CLOUDINARY_SEC   = os.environ.get('CLOUDINARY_API_SECRET', '')
@@ -32,20 +32,16 @@ USE_CLOUDINARY   = bool(CLOUDINARY_CLOUD and CLOUDINARY_KEY and CLOUDINARY_SEC)
 if USE_CLOUDINARY:
     import cloudinary
     import cloudinary.uploader
-    cloudinary.config(
-        cloud_name = CLOUDINARY_CLOUD,
-        api_key    = CLOUDINARY_KEY,
-        api_secret = CLOUDINARY_SEC
-    )
+    cloudinary.config(cloud_name=CLOUDINARY_CLOUD, api_key=CLOUDINARY_KEY, api_secret=CLOUDINARY_SEC)
 
 def upload_photo(img_bytes: bytes, roll_no: str) -> str:
     if USE_CLOUDINARY:
         import cloudinary.uploader
         result = cloudinary.uploader.upload(
             img_bytes,
-            public_id = f"students/{roll_no}",
-            overwrite = True,
-            folder    = "face_attendance"
+            public_id=f"students/{roll_no}",
+            overwrite=True,
+            folder="face_attendance"
         )
         return result['secure_url']
     else:
@@ -75,7 +71,6 @@ def str_to_embedding(s: str):
 
 def save_encoding_db(roll_no, name, student_id, section_id, embedding, photo_url=''):
     conn = get_connection()
-    # Check if exists first
     existing = conn.execute(
         "SELECT roll_no FROM face_encodings WHERE roll_no=?", (roll_no,)
     ).fetchone()
@@ -91,6 +86,7 @@ def save_encoding_db(roll_no, name, student_id, section_id, embedding, photo_url
         )
     conn.commit()
     conn.close()
+
 def delete_encoding_db(roll_no):
     conn = get_connection()
     conn.execute('DELETE FROM face_encodings WHERE roll_no=?', (roll_no,))
@@ -98,7 +94,7 @@ def delete_encoding_db(roll_no):
     conn.close()
 
 def load_encodings():
-    """Load from DB first, fall back to pkl file."""
+    """Load from Turso DB first, fall back to pkl file."""
     try:
         conn = get_connection()
         rows = conn.execute(
@@ -122,16 +118,14 @@ def load_encodings():
                 return encodings
     except Exception as e:
         print(f"⚠️ DB encoding load failed: {e}")
-
-    # Fallback to pkl
     if os.path.exists(ENCODINGS_PATH):
         with open(ENCODINGS_PATH, 'rb') as f:
             return pickle.load(f)
     return {}
 
 def extract_embedding(img_bytes: bytes):
-    arr   = np.frombuffer(img_bytes, np.uint8)
-    img   = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    arr = np.frombuffer(img_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
         return None, None
     faces = get_model().get(img)
@@ -161,7 +155,7 @@ async def register_student(
     parent_email: str        = Form(""),
     parent_name:  str        = Form(""),
     parent_phone: str        = Form(""),
-    photo:        UploadFile = File(...),   # required
+    photo:        UploadFile = File(...),
 ):
     get_auth(request)
     img_bytes = await photo.read()
@@ -171,6 +165,30 @@ async def register_student(
     embedding, img = extract_embedding(img_bytes)
     if embedding is None:
         raise HTTPException(400, "No face detected. Use a clear front-facing photo in good lighting.")
+
+    # ── Per-semester uniqueness check ─────────────────────────
+    conn_sec = get_connection()
+    target_sec = conn_sec.execute(
+        "SELECT semester FROM sections WHERE id=?", (section_id,)
+    ).fetchone()
+    conn_sec.close()
+
+    if target_sec and target_sec['semester']:
+        target_semester = target_sec['semester']
+        conn_dup = get_connection()
+        duplicate = conn_dup.execute("""
+            SELECT st.id FROM students st
+            JOIN sections sec ON sec.id = st.section_id
+            WHERE UPPER(TRIM(st.roll_no)) = UPPER(TRIM(?))
+              AND sec.semester = ?
+        """, (roll_no, target_semester)).fetchone()
+        conn_dup.close()
+        if duplicate:
+            raise HTTPException(
+                400,
+                f"Roll number '{roll_no}' already registered in Semester {target_semester}. "
+                f"A student cannot be in two sections of the same semester."
+            )
 
     photo_url = upload_photo(img_bytes, roll_no)
 
@@ -184,18 +202,15 @@ async def register_student(
         )
         conn.commit()
         student_id = conn.execute(
-            "SELECT id FROM students WHERE roll_no=?", (roll_no,)
+            "SELECT id FROM students WHERE roll_no=? AND section_id=?", (roll_no, section_id)
         ).fetchone()['id']
     except Exception as e:
         conn.close()
-        raise HTTPException(400, f"Roll number already exists or DB error: {str(e)}")
+        raise HTTPException(400, f"DB error: {str(e)}")
     conn.close()
 
-    # Save local copy for runtime recognition
     local_path = os.path.join(KNOWN_FACES, f"{roll_no}.jpg")
     cv2.imwrite(local_path, img)
-
-    # Persist encoding to DB
     save_encoding_db(roll_no, name, student_id, section_id, embedding, photo_url)
 
     return {
@@ -219,7 +234,6 @@ def get_students_by_section(section_id: int):
         ORDER BY s.name
     ''', (section_id,)).fetchall()
     conn.close()
-    # Use dict(r) — works now that TursoRow has correct __iter__
     return [dict(r) for r in rows]
 
 
@@ -275,12 +289,9 @@ async def update_student(
             if embedding is None:
                 conn.close()
                 raise HTTPException(400, "No face detected in new photo.")
-
             photo_url = upload_photo(img_bytes, roll_no)
-
             local_path = os.path.join(KNOWN_FACES, f"{roll_no}.jpg")
             cv2.imwrite(local_path, img)
-
             save_encoding_db(roll_no, name, student_id, section_id, embedding, photo_url)
 
     conn.execute(
@@ -294,7 +305,8 @@ async def update_student(
     conn.commit()
     conn.close()
     return {"message": f"{name} updated successfully", "photo_url": photo_url}
-    
+
+
 @router.get("/restore-encodings")
 def restore_encodings_from_db():
     encodings = load_encodings()
@@ -308,7 +320,6 @@ def restore_encodings_from_db():
 @router.post("/migrate-encodings")
 async def migrate_encodings_from_cloudinary():
     import httpx
-
     conn     = get_connection()
     students = conn.execute(
         "SELECT id, roll_no, name, section_id, photo_url FROM students WHERE photo_url != '' AND photo_url IS NOT NULL"
@@ -316,35 +327,28 @@ async def migrate_encodings_from_cloudinary():
     conn.close()
 
     success, failed = [], []
-
     for s in students:
         roll_no   = s['roll_no']
         photo_url = s['photo_url']
-
-        enc_conn = get_connection()
-        existing = enc_conn.execute(
+        enc_conn  = get_connection()
+        existing  = enc_conn.execute(
             "SELECT roll_no FROM face_encodings WHERE roll_no=?", (roll_no,)
         ).fetchone()
         enc_conn.close()
-
         if existing:
             success.append(f"{s['name']} (already in DB)")
             continue
-
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(photo_url)
             img_bytes = resp.content
-
             embedding, img = extract_embedding(img_bytes)
             if embedding is None:
                 failed.append(f"{s['name']} — no face detected")
                 continue
-
             cv2.imwrite(os.path.join(KNOWN_FACES, f"{roll_no}.jpg"), img)
             save_encoding_db(roll_no, s['name'], s['id'], s['section_id'], embedding, photo_url)
             success.append(s['name'])
-
         except Exception as e:
             failed.append(f"{s['name']} — {str(e)}")
 
