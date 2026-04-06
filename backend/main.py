@@ -15,7 +15,6 @@ from routes.chatbot       import router as chat_router
 
 app = FastAPI(title="Face Attendance API", version="2.0")
 
-# ── CORS ──────────────────────────────────────────────────────
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:4173",
@@ -32,17 +31,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Count helper (works with both Turso and SQLite) ───────────
 def count(conn, sql, params=()):
     row = conn.execute(sql, params).fetchone()
     try:    return row['c']
     except: return row[0]
 
-# ── Startup ───────────────────────────────────────────────────
 @app.on_event("startup")
 def startup():
     init_db()
-    # Auto-restore face encodings from DB to local pkl on every boot
     try:
         import pickle
         from routes.students import load_encodings, ENCODINGS_PATH
@@ -57,7 +53,6 @@ def startup():
     except Exception as e:
         print(f"⚠️ Could not restore encodings: {e}")
 
-# ── Auth dependency ───────────────────────────────────────────
 def get_current_user(authorization: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -77,7 +72,6 @@ def require_faculty(user=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Faculty access required")
     return user
 
-# ── Auth routes ───────────────────────────────────────────────
 class LoginRequest(BaseModel):
     username: Optional[str] = None
     email:    Optional[str] = None
@@ -101,7 +95,6 @@ def faculty_login(body: LoginRequest):
 def get_me(user=Depends(get_current_user)):
     return user
 
-# ── Admin — Faculties ─────────────────────────────────────────
 class FacultyCreate(BaseModel):
     name:       str
     email:      str
@@ -169,27 +162,30 @@ def delete_faculty(faculty_id: int, user=Depends(require_admin)):
     conn.close()
     return {"message": "Faculty deleted"}
 
-# ── Admin — Sections ──────────────────────────────────────────
+# ── Sections ──────────────────────────────────────────────────
+
 class SectionCreate(BaseModel):
     name:       str
     department: Optional[str] = ""
+    semester:   Optional[str] = ""
     faculty_id: int
 
 class SectionUpdate(BaseModel):
     name:       str
     department: Optional[str] = ""
+    semester:   Optional[str] = ""
     faculty_id: int
 
 @app.get("/api/admin/sections")
 def get_all_sections(user=Depends(require_admin)):
     conn = get_connection()
     rows = conn.execute('''
-        SELECT s.id, s.name, s.department, s.faculty_id,
+        SELECT s.id, s.name, s.department, s.semester, s.faculty_id,
                f.name as faculty_name, COUNT(st.id) as student_count
         FROM sections s
         LEFT JOIN faculties f ON f.id = s.faculty_id
         LEFT JOIN students st ON st.section_id = s.id
-        GROUP BY s.id ORDER BY s.name
+        GROUP BY s.id ORDER BY s.semester, s.name
     ''').fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -199,8 +195,8 @@ def create_section(body: SectionCreate, user=Depends(require_admin)):
     conn = get_connection()
     try:
         conn.execute(
-            "INSERT INTO sections (name, department, faculty_id) VALUES (?,?,?)",
-            (body.name, body.department, body.faculty_id)
+            "INSERT INTO sections (name, department, semester, faculty_id) VALUES (?,?,?,?)",
+            (body.name, body.department, body.semester, body.faculty_id)
         )
         conn.commit()
         return {"message": f"Section {body.name} created"}
@@ -216,8 +212,8 @@ def update_section(section_id: int, data: SectionUpdate, user=Depends(require_ad
         conn.close()
         raise HTTPException(404, "Section not found")
     conn.execute(
-        "UPDATE sections SET name=?, department=?, faculty_id=? WHERE id=?",
-        (data.name, data.department, data.faculty_id, section_id)
+        "UPDATE sections SET name=?, department=?, semester=?, faculty_id=? WHERE id=?",
+        (data.name, data.department, data.semester, data.faculty_id, section_id)
     )
     conn.commit()
     conn.close()
@@ -231,7 +227,6 @@ def delete_section(section_id: int, user=Depends(require_admin)):
     conn.close()
     return {"message": "Section deleted"}
 
-# ── Admin stats ───────────────────────────────────────────────
 @app.get("/api/admin/stats")
 def admin_stats(user=Depends(require_admin)):
     from datetime import date
@@ -247,15 +242,14 @@ def admin_stats(user=Depends(require_admin)):
     conn.close()
     return stats
 
-# ── Faculty routes ────────────────────────────────────────────
 @app.get("/api/faculty/sections")
 def get_my_sections(user=Depends(require_faculty)):
     faculty_id = int(user['sub'])
     conn = get_connection()
     rows = conn.execute('''
-        SELECT s.id, s.name, s.department, COUNT(st.id) as student_count
+        SELECT s.id, s.name, s.department, s.semester, COUNT(st.id) as student_count
         FROM sections s LEFT JOIN students st ON st.section_id = s.id
-        WHERE s.faculty_id = ? GROUP BY s.id
+        WHERE s.faculty_id = ? GROUP BY s.id ORDER BY s.semester, s.name
     ''', (faculty_id,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -270,7 +264,6 @@ def get_section_students(section_id: int, user=Depends(require_faculty)):
     conn.close()
     return [dict(r) for r in rows]
 
-# ── Faculty stats ─────────────────────────────────────────────
 @app.get("/api/faculty/stats")
 def faculty_stats(user=Depends(require_faculty)):
     from datetime import date
@@ -286,14 +279,12 @@ def faculty_stats(user=Depends(require_faculty)):
     conn.close()
     return stats
 
-# ── Routers ───────────────────────────────────────────────────
 app.include_router(students_router)
 app.include_router(attendance_router)
 app.include_router(qr_router)
 app.include_router(alerts_router)
 app.include_router(chat_router)
 
-# ── Health check ──────────────────────────────────────────────
 @app.get("/")
 def root():
     return {"status": "Face Attendance API Running", "version": "2.0"}
