@@ -5,7 +5,6 @@ os.environ['OMP_NUM_THREADS'] = '1'
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from database import get_connection
-from auth import decode_token
 from datetime import date, datetime
 import cv2
 import numpy as np
@@ -23,39 +22,7 @@ os.makedirs(UNKNOWN_PATH,   exist_ok=True)
 os.makedirs(CLASSROOM_PATH, exist_ok=True)
 
 from face_model import get_model
-
-# ── Load encodings from DB first, fall back to pkl ────────────
-def load_encodings():
-    try:
-        conn = get_connection()
-        rows = conn.execute(
-            "SELECT roll_no, name, student_id, section_id, embedding, photo_url FROM face_encodings"
-        ).fetchall()
-        conn.close()
-        if rows:
-            result = {}
-            for r in rows:
-                try:
-                    emb = pickle.loads(base64.b64decode(r['embedding'].encode('utf-8')))
-                    result[r['roll_no']] = {
-                        'name':       r['name'],
-                        'student_id': r['student_id'],
-                        'section_id': r['section_id'],
-                        'embedding':  emb,
-                        'photo_url':  r['photo_url'] if r['photo_url'] else '',
-                    }
-                except Exception:
-                    continue
-            if result:
-                return result
-    except Exception as e:
-        print(f"⚠️ Could not load encodings from DB: {e}")
-
-    # Fall back to pkl file
-    if os.path.exists(ENCODINGS_PATH):
-        with open(ENCODINGS_PATH, 'rb') as f:
-            return pickle.load(f)
-    return {}
+from routes.students import load_encodings, str_to_embedding
 
 def cosine_similarity(a, b):
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
@@ -143,11 +110,9 @@ async def process_attendance(
         label = f"{name} ({similarity:.2f})"
         cv2.putText(img, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         results.append({
-            "name":       name,
-            "roll_no":    roll_no,
+            "name": name, "roll_no": roll_no,
             "similarity": round(similarity, 3),
-            "status":     status,
-            "bbox":       [x1, y1, x2, y2]
+            "status": status, "bbox": [x1, y1, x2, y2]
         })
 
     if method == "classroom":
@@ -164,11 +129,8 @@ async def process_attendance(
         "already_marked": sum(1 for r in results if r['status'] == 'already_marked'),
         "unknown":        sum(1 for r in results if r['status'] == 'unknown'),
     }
-    return {
-        "results":          results,
-        "summary":          summary,
-        "annotated_image":  f"data:image/jpeg;base64,{img_base64}"
-    }
+    return {"results": results, "summary": summary, "annotated_image": f"data:image/jpeg;base64,{img_base64}"}
+
 
 @router.get("/section/{section_id}")
 def get_section_attendance(section_id: int, date_str: str = None):
@@ -183,6 +145,7 @@ def get_section_attendance(section_id: int, date_str: str = None):
     conn.close()
     return [dict(r) for r in rows]
 
+
 @router.get("/section/{section_id}/summary")
 def get_section_summary(section_id: int):
     conn = get_connection()
@@ -194,6 +157,52 @@ def get_section_summary(section_id: int):
     conn.close()
     return [dict(r) for r in rows]
 
+
+@router.get("/section/{section_id}/range")
+def get_range_attendance(section_id: int, from_date: str, to_date: str):
+    """Per-student attendance stats for a date range with percentage."""
+    conn = get_connection()
+
+    students = conn.execute(
+        "SELECT id, name, roll_no FROM students WHERE section_id=? ORDER BY name",
+        (section_id,)
+    ).fetchall()
+
+    # Count distinct class days in range for this section
+    dates = conn.execute("""
+        SELECT DISTINCT date FROM attendance
+        WHERE section_id=? AND date >= ? AND date <= ?
+        ORDER BY date
+    """, (section_id, from_date, to_date)).fetchall()
+
+    total_days = len(dates)
+
+    result = []
+    for student in students:
+        present_row = conn.execute("""
+            SELECT COUNT(*) as c FROM attendance
+            WHERE student_id=? AND date >= ? AND date <= ?
+        """, (student['id'], from_date, to_date)).fetchone()
+
+        try:
+            present_days = present_row['c']
+        except Exception:
+            present_days = present_row[0]
+
+        percentage = round((present_days / total_days * 100), 2) if total_days > 0 else 0.0
+
+        result.append({
+            "name":         student['name'],
+            "roll_no":      student['roll_no'],
+            "present_days": present_days,
+            "total_days":   total_days,
+            "percentage":   percentage,
+        })
+
+    conn.close()
+    return result
+
+
 @router.get("/section/{section_id}/dates")
 def get_attendance_dates(section_id: int):
     conn = get_connection()
@@ -204,6 +213,7 @@ def get_attendance_dates(section_id: int):
     ''', (section_id,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
 
 @router.get("/unknown-logs")
 def get_unknown_logs(faculty_id: int = None):
