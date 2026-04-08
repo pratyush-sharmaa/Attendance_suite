@@ -7,12 +7,12 @@ const NAV = [
   { icon: '📊', label: 'Dashboard',     path: '/faculty' },
   { icon: '👨‍🎓', label: 'Students',      path: '/faculty/students' },
   { icon: '📷', label: 'Attendance',    path: '/faculty/attendance' },
-  { icon: '📱', label: 'QR Attendance', path: '/faculty/qr' },      // NEW
-  { icon: '📧', label: 'Alerts',        path: '/faculty/alerts' },   // NEW
+  { icon: '📱', label: 'QR Attendance', path: '/faculty/qr' },
+  { icon: '📧', label: 'Alerts',        path: '/faculty/alerts' },
   { icon: '📋', label: 'Reports',       path: '/faculty/reports' },
 ]
 
-interface Section { id: number; name: string; department: string }
+interface Section { id: number; name: string; department: string; semester: string }
 interface Result  { name: string; roll_no: string; similarity: number; status: string }
 
 export default function FacultyAttendance() {
@@ -39,7 +39,6 @@ export default function FacultyAttendance() {
     setTimeout(() => setToast(null), 3500)
   }
 
-  // Load sections on mount — fully release camera on unmount
   useEffect(() => {
     api.get('/api/faculty/sections').then(r => {
       setSections(r.data)
@@ -47,22 +46,18 @@ export default function FacultyAttendance() {
     })
 
     return () => {
-      // Guaranteed cleanup when navigating away
       releaseCamera()
     }
   }, [])
 
-  // Mode change — stop camera when switching to classroom, do NOT auto-start webcam
   useEffect(() => {
     if (mode === 'classroom') {
       stopCamera()
       setAnnotatedImg(null)
       setResults([])
     }
-    // webcam mode: user clicks Start Camera manually
   }, [mode])
 
-  // The real camera release — detach video FIRST, then stop tracks
   const releaseCamera = () => {
     if (videoRef.current) {
       videoRef.current.pause()
@@ -96,12 +91,10 @@ export default function FacultyAttendance() {
   }
 
   const stopCamera = () => {
-    // Detach from video element FIRST (Chrome quirk — must do this before stopping tracks)
     if (videoRef.current) {
       videoRef.current.pause()
       videoRef.current.srcObject = null
     }
-    // Now stop all tracks — camera light turns off
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => {
         t.enabled = false
@@ -212,14 +205,17 @@ export default function FacultyAttendance() {
                     onChange={e => {
                       const sec = sections.find(s => s.id === parseInt(e.target.value))
                       if (sec) setSelectedSection(sec)
-                      // Only clear results — camera keeps running
                       setResults([])
                       setAnnotatedImg(null)
                     }}
                   >
                     {sections.length === 0
                       ? <option>No sections available</option>
-                      : sections.map(s => <option key={s.id} value={s.id}>{s.name} — {s.department}</option>)
+                      : sections.map(s => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}{s.semester ? ` — Sem ${s.semester}` : ''} — {s.department}
+                          </option>
+                        ))
                     }
                   </select>
                 </div>
