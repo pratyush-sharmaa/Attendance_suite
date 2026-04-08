@@ -59,13 +59,11 @@ export default function FacultyReports() {
     if (!selectedSection || !fromDate || !toDate) return
     setLoading(true)
     try {
-      // Get all attendance records in range
       const res = await api.get(
         `/api/attendance/section/${selectedSection.id}/range?from_date=${fromDate}&to_date=${toDate}`
       )
       setRangeStats(res.data)
     } catch {
-      // Fallback: calculate from summary if range endpoint not available
       const sumRes = await api.get(`/api/attendance/section/${selectedSection.id}/summary`)
       setSummary(sumRes.data)
     } finally {
@@ -252,7 +250,6 @@ export default function FacultyReports() {
               </div>
             ) : (
               <>
-                {/* Summary stats for range */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 20 }}>
                   {[
                     { label: 'Students',    val: rangeStats.length,                                                                color: '#6366f1' },
