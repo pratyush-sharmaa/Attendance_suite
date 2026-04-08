@@ -11,7 +11,7 @@ const NAV = [
   { icon: '📋', label: 'Reports',       path: '/faculty/reports' },
 ]
 
-interface Section { id: number; name: string; student_count: number }
+interface Section { id: number; name: string; student_count: number; semester: string }
 interface Student { id: number; name: string; roll_no: string; parent_email: string; parent_name: string; parent_phone: string }
 interface AlertResult { student: string; roll_no: string; parent_email: string; absent_dates: string[]; email_sent: boolean }
 interface AlertLog { id: number; student_name: string; roll_no: string; absent_dates: string; email_sent: number; sent_to: string; sent_at: string }
@@ -182,7 +182,7 @@ export default function EmailAlerts() {
           </p>
         </div>
 
-        {/* Section selector */}
+        {/* Section tabs */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 24, flexWrap: 'wrap' }}>
           {sections.map(sec => (
             <button key={sec.id} onClick={() => setSelectedSection(sec)} style={{
@@ -193,6 +193,15 @@ export default function EmailAlerts() {
               color: selectedSection?.id === sec.id ? 'white' : '#64748b'
             }}>
               🏫 {sec.name}
+              {sec.semester && (
+                <span style={{
+                  marginLeft: 6, fontSize: '0.75rem', opacity: 0.85,
+                  background: selectedSection?.id === sec.id ? 'rgba(255,255,255,0.2)' : 'rgba(99,102,241,0.2)',
+                  padding: '1px 6px', borderRadius: 10
+                }}>
+                  Sem {sec.semester}
+                </span>
+              )}
             </button>
           ))}
         </div>
