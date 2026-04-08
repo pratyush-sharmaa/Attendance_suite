@@ -11,7 +11,7 @@ const NAV = [
   { icon: '📋', label: 'Reports',       path: '/faculty/reports' },
 ]
 
-interface Section { id: number; name: string; department: string; student_count: number }
+interface Section { id: number; name: string; department: string; student_count: number; semester: string }
 interface Student {
   id: number; name: string; roll_no: string; phone: string; registered_at: string
   parent_email: string; parent_name: string; parent_phone: string; photo_url: string
@@ -213,6 +213,15 @@ export default function FacultyStudents() {
                 color: selectedSection?.id === sec.id ? 'white' : '#64748b'
               }}>
                 🏫 {sec.name}
+                {sec.semester && (
+                  <span style={{
+                    marginLeft: 6, fontSize: '0.75rem', opacity: 0.85,
+                    background: selectedSection?.id === sec.id ? 'rgba(255,255,255,0.2)' : 'rgba(99,102,241,0.2)',
+                    padding: '1px 6px', borderRadius: 10
+                  }}>
+                    Sem {sec.semester}
+                  </span>
+                )}
                 <span style={{ opacity: 0.7, marginLeft: 4 }}>({sec.student_count})</span>
               </button>
             ))}
