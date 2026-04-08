@@ -6,12 +6,12 @@ const NAV = [
   { icon: '📊', label: 'Dashboard',     path: '/faculty' },
   { icon: '👨‍🎓', label: 'Students',      path: '/faculty/students' },
   { icon: '📷', label: 'Attendance',    path: '/faculty/attendance' },
-  { icon: '📱', label: 'QR Attendance', path: '/faculty/qr' },      // NEW
-  { icon: '📧', label: 'Alerts',        path: '/faculty/alerts' },   // NEW
+  { icon: '📱', label: 'QR Attendance', path: '/faculty/qr' },
+  { icon: '📧', label: 'Alerts',        path: '/faculty/alerts' },
   { icon: '📋', label: 'Reports',       path: '/faculty/reports' },
 ]
 
-interface Section { id: number; name: string; department: string }
+interface Section { id: number; name: string; department: string; semester: string }
 interface MarkedEntry { name: string; roll_no: string; time: string; score: number }
 
 export default function QRAttendance() {
@@ -56,9 +56,8 @@ export default function QRAttendance() {
       })
       setQrData(res.data)
       setSessionData({ marked: [], marked_count: 0, active: true })
-      setTimeLeft(2 * 60) // 2 minutes in seconds
+      setTimeLeft(2 * 60)
 
-      // Poll for session updates every 3 seconds
       clearInterval(pollRef.current)
       pollRef.current = setInterval(() => {
         api.get(`/api/qr/session/${res.data.token}`).then(r => {
@@ -70,7 +69,6 @@ export default function QRAttendance() {
         })
       }, 3000)
 
-      // Countdown timer
       clearInterval(timerRef.current)
       let remaining = 2 * 60
       timerRef.current = setInterval(() => {
@@ -79,7 +77,6 @@ export default function QRAttendance() {
         if (remaining <= 0) {
           clearInterval(timerRef.current)
           clearInterval(pollRef.current)
-          // Auto-expire: kill session on backend and clear QR from screen
           api.delete(`/api/qr/session/${res.data.token}`).catch(() => {})
           setQrData(null)
           setSessionData(null)
@@ -128,7 +125,6 @@ export default function QRAttendance() {
         </div>
 
         {!qrData ? (
-          /* Setup screen */
           <div style={{ maxWidth: 560 }}>
             <div className="card" style={{ marginBottom: 20 }}>
               <h3 style={{ color: '#e2e8f0', marginBottom: 20, fontWeight: 600 }}>⚙️ Setup Session</h3>
@@ -142,7 +138,11 @@ export default function QRAttendance() {
                     if (sec) setSelectedSection(sec)
                   }}
                 >
-                  {sections.map(s => <option key={s.id} value={s.id}>{s.name} — {s.department}</option>)}
+                  {sections.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}{s.semester ? ` — Sem ${s.semester}` : ''} — {s.department}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -189,7 +189,6 @@ export default function QRAttendance() {
             </div>
           </div>
         ) : (
-          /* Active session */
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
 
             {/* Left — QR display */}
@@ -201,7 +200,6 @@ export default function QRAttendance() {
                   </span>
                 </div>
 
-                {/* QR Image */}
                 <div style={{
                   background: 'white', borderRadius: 16, padding: 16,
                   display: 'inline-block', marginBottom: 20,
@@ -254,7 +252,6 @@ export default function QRAttendance() {
                 </button>
               </div>
 
-              {/* Student URL for manual sharing */}
               <div className="card" style={{ marginTop: 16, padding: 16 }}>
                 <p style={{ color: '#475569', fontSize: '0.75rem', marginBottom: 8 }}>
                   📋 Manual link (share if QR scan doesn't work):
