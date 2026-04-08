@@ -25,6 +25,7 @@ interface Section {
   name: string
   department: string
   student_count: number
+  semester: string
 }
 
 export default function FacultyDashboard() {
@@ -157,7 +158,10 @@ export default function FacultyDashboard() {
                       <div style={{ fontSize: 28, marginBottom: 10 }}>🏫</div>
                       <div style={{ fontWeight: 700, color: '#e2e8f0', fontSize: '1rem' }}>{sec.name}</div>
                       <div style={{ color: '#475569', fontSize: '0.8rem', marginTop: 4 }}>{sec.department}</div>
-                      <div style={{ marginTop: 12 }}>
+                      <div style={{ marginTop: 12, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {sec.semester && (
+                          <span className="badge badge-purple">Sem {sec.semester}</span>
+                        )}
                         <span className="badge badge-purple">{sec.student_count} students</span>
                       </div>
                     </div>
